@@ -37,7 +37,7 @@ app.get("/tables", async (req: express.Request, res: express.Response) => {
     >`SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'`;
     res.json(tables.map(t => t.tablename));
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch tables" });
+    res.status(500).json({ error: `Failed to fetch tables - ${error}` });
   }
 });
 

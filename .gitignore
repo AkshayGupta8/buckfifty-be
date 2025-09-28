@@ -1,0 +1,3 @@
+deploy_database.sh
+.env
+node_modules/

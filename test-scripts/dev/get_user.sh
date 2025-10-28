@@ -1,0 +1,1 @@
+curl http://localhost:3000/users/d70f461a-6135-4ef0-96ab-29cdd051d1c9

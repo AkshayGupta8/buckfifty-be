@@ -35,6 +35,8 @@ model User {
   activities   Activity[]
   members      Member[]
   events       Event[]   @relation("EventCreatedBy")
+
+  phoneAuthCodes PhoneAuthCode[]
 }
 
 model Activity {
@@ -102,4 +104,16 @@ model TimeSlot {
   event       Event   @relation(fields: [event_id], references: [event_id], onDelete: Cascade)
 
   @@index([event_id])
+}
+
+model PhoneAuthCode {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id     String   @db.Uuid
+  code        String
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  user        User     @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([created_at])
 }

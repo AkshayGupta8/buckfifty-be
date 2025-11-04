@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Base URL of the API
-BASE_URL="http://localhost:3000"
+BASE_URL="https://c59da4db672d.ngrok-free.app"
 
 if [ -z "$1" ]; then
   echo "Usage: $0 <user_id>"

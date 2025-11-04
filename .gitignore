@@ -2,3 +2,4 @@ deploy_database.sh
 .env
 node_modules/
 buckfifty-be.pem
+logs/

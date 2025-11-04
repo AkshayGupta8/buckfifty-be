@@ -2,6 +2,8 @@ require('dotenv').config();
 
 import express from "express";
 import { PrismaClient } from "@prisma/client";
+import logger, { asyncLocalStorage } from "./utils/logger";
+import { v4 as uuidv4 } from "uuid";
 
 import userRouter from "./routes/user";
 import activityRouter from "./routes/activity";
@@ -13,12 +15,28 @@ import timeSlotRouter from "./routes/timeSlot";
 const app = express();
 const prisma = new PrismaClient();
 
+// Middleware to assign a unique request ID and run the request in AsyncLocalStorage context
 app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
+  const requestId = uuidv4();
+  asyncLocalStorage.run(new Map([["requestId", requestId]]), () => {
+    next();
+  });
 });
 
 app.use(express.json());
+
+app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+  logger.info(`Incoming request: ${req.method} ${req.url} - Body: ${JSON.stringify(req.body)}`);
+
+  // Hook into res.send to log response body
+  const originalSend = res.send.bind(res);
+  res.send = (body?: any): express.Response => {
+    logger.info(`Response for ${req.method} ${req.url} - Status: ${res.statusCode} - Body: ${body}`);
+    return originalSend(body);
+  };
+
+  next();
+});
 
 app.use("/users", userRouter);
 app.use("/activities", activityRouter);
@@ -45,5 +63,5 @@ app.get("/tables", async (req: express.Request, res: express.Response) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  logger.info(`Server running on port ${port}`);
 });

@@ -3,3 +3,4 @@ deploy_database.sh
 node_modules/
 buckfifty-be.pem
 logs/
+dist/

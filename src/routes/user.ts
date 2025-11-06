@@ -5,12 +5,22 @@ import { sendSms } from "../utils/twilioClient";
 const prisma = new PrismaClient();
 const router = Router();
 
+import { Prisma } from "@prisma/client";
+
 // Create User
 router.post("/", async (req: Request, res: Response) => {
   try {
     const user = await prisma.user.create({ data: req.body });
     res.status(201).json(user);
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002" &&
+      Array.isArray(error.meta?.target) &&
+      error.meta.target.includes("phone_number")
+    ) {
+      return res.status(400).json({ error: "Phone number is already registered" });
+    }
     res.status(500).json({ error: "Failed to create user" });
   }
 });

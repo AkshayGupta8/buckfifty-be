@@ -36,7 +36,7 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 // Get User by ID
-router.get("/:id", async (req: Request, res: Response) => {
+router.get("/id/:id", async (req: Request, res: Response) => {
   try {
     const user = await prisma.user.findUnique({
       where: { user_id: req.params.id },
@@ -49,7 +49,7 @@ router.get("/:id", async (req: Request, res: Response) => {
 });
 
 // Get User by phone number
-router.get("/:phoneNumber", async (req: Request, res: Response) => {
+router.get("/phone/:phoneNumber", async (req: Request, res: Response) => {
   try {
     const user = await prisma.user.findUnique({
       where: { phone_number: req.params.phoneNumber },

@@ -1,21 +1,15 @@
 #!/bin/bash
 
 # Base URL of the API
-BASE_URL="http://localhost:3000"
+BASE_URL="http://new-be.buckfifty-ai-herdmanager.click"
 
-# File containing list of user IDs to delete
-USER_IDS_FILE="temp"
 
-if [ ! -f "$USER_IDS_FILE" ]; then
-  echo "User IDs file '$USER_IDS_FILE' not found!"
+if [ -z "$1" ]; then
+  echo "Usage: $0 <user_id>"
   exit 1
 fi
 
-while IFS= read -r USER_ID
-do
-  if [ -n "$USER_ID" ]; then
-    echo "Deleting user with ID: $USER_ID"
-    curl -X DELETE "$BASE_URL/users/$USER_ID"
-    echo -e "\n"
-  fi
-done < "$USER_IDS_FILE"
+USER_ID=$1
+
+# Send authentication code to user's phone
+curl -X DELETE "$BASE_URL/users/$USER_ID"

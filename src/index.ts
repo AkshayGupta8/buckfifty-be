@@ -61,7 +61,7 @@ app.get("/tables", async (req: express.Request, res: express.Response) => {
   }
 });
 
-const port = process.env.DEV ? 3000 : 80;
+const port = process.env.DEV === '1' ? 3000 : 80;
 app.listen(port, () => {
   logger.info(`Server running on port ${port}`);
 });

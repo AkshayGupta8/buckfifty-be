@@ -3,9 +3,11 @@
     "version": "1.0.0",
     "main": "dist/index.js",
     "scripts": {
+        "clean": "rm -rf dist",
         "build": "tsc",
         "start": "node dist/index.js",
-        "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+        "server": "npm run clean && npm run build && npm run start",
+        "dev": "DEV=1 ts-node-dev --respawn --transpile-only src/index.ts",
         "prisma:generate": "prisma generate",
         "prisma:migrate": "prisma migrate dev"
     },

@@ -9,8 +9,9 @@ router.post("/", async (req: Request, res: Response) => {
   try {
     const event = await prisma.event.create({ data: req.body });
     res.status(201).json(event);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to create event" });
+  } catch (error: any) {
+    console.error("Error creating event:", error);
+    res.status(500).json({ error: "Failed to create event", details: error.message || error.toString() });
   }
 });
 
@@ -81,6 +82,36 @@ router.get("/by-activity/:activityId", async (req: Request, res: Response) => {
     res.json(events);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch events by activity" });
+  }
+});
+
+router.get("/active-events-by-user/:userId", async (req: Request, res: Response) => {
+  try {
+    const userId = req.params.userId;
+
+    // Get current UTC time
+    const now = new Date();
+
+    // Find events created by user with at least one timeSlot where end_time > now
+    const events = await prisma.event.findMany({
+      where: {
+        created_by_user_id: userId,
+        timeSlots: {
+          some: {
+            end_time: {
+              gt: now,
+            },
+          },
+        },
+      },
+      include: {
+        timeSlots: true,
+      },
+    });
+
+    res.json(events);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch current events by user" });
   }
 });
 

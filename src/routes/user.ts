@@ -74,12 +74,29 @@ router.put("/:id", async (req: Request, res: Response) => {
   }
 });
 
-// Delete User by ID
+// Delete User by ID (cascade)
 router.delete("/:id", async (req: Request, res: Response) => {
+  const userId = req.params.id;
+
   try {
-    await prisma.user.delete({ where: { user_id: req.params.id } });
+    await prisma.$transaction(async (tx) => {
+      // Must delete events first because Event.createdBy -> User is ON DELETE RESTRICT
+      await tx.event.deleteMany({
+        where: { created_by_user_id: userId },
+      });
+
+      // DB-level cascades will remove activities, members, phone auth codes, etc.
+      await tx.user.delete({ where: { user_id: userId } });
+    });
+
     res.status(204).send();
-  } catch (error) {
+  } catch (error: any) {
+    // Record not found
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    console.error("Failed to delete user:", error);
     res.status(500).json({ error: "Failed to delete user" });
   }
 });

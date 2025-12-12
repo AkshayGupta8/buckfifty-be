@@ -176,4 +176,34 @@ router.post("/:userId/verify-code", async (req: Request, res: Response) => {
   }
 });
 
+
+// POST /users/:userId/send-code
+router.post("/:userId/send-contact-card", async (req: Request, res: Response) => {
+  const { userId } = req.params;
+
+  try {
+    // Fetch user with phone number
+    const user = await prisma.user.findUnique({
+      where: { user_id: userId },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (!user.phone_number) {
+      return res.status(400).json({ error: "User has no phone number" });
+    }
+
+    // Send SMS via Twilio
+  const messageBody = "Hi! I'm Buckfifty, your AI assistant.\n\nI'm looking forward to helping you connec with your Homies!";
+    await sendSms(user.phone_number, messageBody);
+
+    res.json({ message: "Contact Card sent" });
+  } catch (error) {
+    console.error("Error in send-code endpoint:", error);
+    res.status(500).json({ error: "Failed to send contact card code" });
+  }
+});
+
 export default router;

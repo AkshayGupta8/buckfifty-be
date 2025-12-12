@@ -4,6 +4,7 @@ import express from "express";
 import { PrismaClient } from "@prisma/client";
 import logger, { asyncLocalStorage } from "./utils/logger";
 import { v4 as uuidv4 } from "uuid";
+import path from "path";
 
 import userRouter from "./routes/user";
 import activityRouter from "./routes/activity";
@@ -24,6 +25,10 @@ app.use((req: express.Request, res: express.Response, next: express.NextFunction
 });
 
 app.use(express.json());
+
+// Serve static assets (e.g. vCard contact files) from /public
+// Example: GET /public/Buckfifty%20AI%20Assistant.vcf
+app.use("/public", express.static(path.join(process.cwd(), "public")));
 
 app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
   logger.info(`Incoming request: ${req.method} ${req.url} - Body: ${JSON.stringify(req.body)}`);

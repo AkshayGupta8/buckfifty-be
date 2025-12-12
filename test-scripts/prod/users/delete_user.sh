@@ -1,0 +1,1 @@
+../../users/delete_user.sh

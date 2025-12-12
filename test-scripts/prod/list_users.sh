@@ -1,1 +1,0 @@
-curl https://c59da4db672d.ngrok-free.app/users/

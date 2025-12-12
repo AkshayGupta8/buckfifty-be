@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/base.sh"
+parse_base_url "$@"
+
+if [[ ${#REMAINING_ARGS[@]} -lt 1 ]]; then
+  echo "Usage: $0 [--prod] <activity_id>" >&2
+  exit 1
+fi
+
+ACTIVITY_ID="${REMAINING_ARGS[0]}"
+
+curl -X PUT "$BASE_URL/activities/$ACTIVITY_ID" \
+  -H "Content-Type: application/json" \
+  -d '{
+  "name": "Updated Test Activity",
+  "description": "This is an updated test activity"
+}'

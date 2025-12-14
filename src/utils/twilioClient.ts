@@ -24,3 +24,24 @@ export async function sendSms(to: string, body: string): Promise<string> {
     throw error;
   }
 }
+
+export async function sendMms(
+  to: string,
+  body: string,
+  mediaUrl: string | string[],
+): Promise<string> {
+  try {
+    const message = await client.messages.create({
+      body,
+      from: fromNumber,
+      to,
+      mediaUrl: Array.isArray(mediaUrl) ? mediaUrl : [mediaUrl],
+    });
+
+    console.log(`MMS sent successfully. SID: ${message.sid}`);
+    return message.sid;
+  } catch (error) {
+    console.error("Failed to send MMS via Twilio:", error);
+    throw error;
+  }
+}

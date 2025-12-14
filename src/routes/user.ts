@@ -175,7 +175,7 @@ router.post("/:userId/verify-code", async (req: Request, res: Response) => {
 });
 
 // POST /users/:userId/send-contact-card
-router.post("/:userId/send-contact-card", async (req: Request, res: Response) => {
+router.post("/:userId/share-contact-card", async (req: Request, res: Response) => {
   const { userId } = req.params;
 
   try {
@@ -200,7 +200,7 @@ router.post("/:userId/send-contact-card", async (req: Request, res: Response) =>
     const vcardPath = "/public/Buckfifty%20AI%20Assistant.vcf";
     const mediaUrl = new URL(vcardPath, publicBaseUrl).toString();
 
-    const messageBody = "Save Buckfifty to your contacts";
+    const messageBody = "Hello! I'm Buckfifty, your AI Assistant. I'm looking forward to connect you with your Homies!\n\nSave Buckfifty to your contacts";
     const messageSid = await sendMms(user.phone_number, messageBody, mediaUrl);
 
     res.json({ message: "Contact Card sent", messageSid, mediaUrl });

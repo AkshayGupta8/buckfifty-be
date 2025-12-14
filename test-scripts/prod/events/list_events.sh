@@ -1,1 +1,0 @@
-../../events/list_events.sh

@@ -1,1 +1,0 @@
-../../activities/list_activities.sh

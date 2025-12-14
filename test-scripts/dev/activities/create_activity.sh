@@ -1,1 +1,0 @@
-../../activities/create_activity.sh

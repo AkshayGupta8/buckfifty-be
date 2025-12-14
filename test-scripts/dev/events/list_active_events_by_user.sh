@@ -1,1 +1,0 @@
-../../events/list_active_events_by_user.sh

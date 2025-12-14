@@ -1,1 +1,0 @@
-../../events/delete_event.sh

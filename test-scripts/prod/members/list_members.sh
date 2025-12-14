@@ -1,1 +1,0 @@
-../../members/list_members.sh

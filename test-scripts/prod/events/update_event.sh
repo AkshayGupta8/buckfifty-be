@@ -1,1 +1,0 @@
-../../events/update_event.sh

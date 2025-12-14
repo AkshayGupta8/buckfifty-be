@@ -1,1 +1,0 @@
-../../members/delete_member.sh

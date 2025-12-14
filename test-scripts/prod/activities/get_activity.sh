@@ -1,1 +1,0 @@
-../../activities/get_activity.sh

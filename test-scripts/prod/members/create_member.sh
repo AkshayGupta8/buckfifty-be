@@ -1,1 +1,0 @@
-../../members/create_member.sh

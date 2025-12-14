@@ -1,1 +1,0 @@
-../../users/get_user.sh

@@ -1,1 +1,0 @@
-../../activities/delete_activity.sh

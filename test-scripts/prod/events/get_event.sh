@@ -1,1 +1,0 @@
-../../events/get_event.sh

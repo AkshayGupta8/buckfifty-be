@@ -12,6 +12,7 @@ import memberRouter from "./routes/member";
 import eventRouter from "./routes/event";
 import eventMemberRouter from "./routes/eventMember";
 import timeSlotRouter from "./routes/timeSlot";
+import conversationRouter from "./routes/conversation";
 
 const app = express();
 const prisma = new PrismaClient();
@@ -24,6 +25,8 @@ app.use((req: express.Request, res: express.Response, next: express.NextFunction
   });
 });
 
+// Twilio webhooks POST as application/x-www-form-urlencoded by default
+app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 // Serve static assets (e.g. vCard contact files) from /public
@@ -49,6 +52,7 @@ app.use("/members", memberRouter);
 app.use("/events", eventRouter);
 app.use("/eventMembers", eventMemberRouter);
 app.use("/timeSlots", timeSlotRouter);
+app.use("/conversations", conversationRouter);
 
 app.get("/echo", (req: express.Request, res: express.Response) => {
   const message = req.query.message || "Hello from echo endpoint!";

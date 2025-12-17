@@ -1,15 +1,20 @@
-npx prism generate
-npx prisma migrate dev
+# RDS/Aurora Postgres Instance
 
-npm run dev
+## Update the schema
+1. Update the database schema /prisma/schema.prism
+2. `npx prisma format`                                      # Format the new schema
+3. `npx prism generate`                                     # Generate the new prisma client
+4. `npx prisma migrate dev --name <name of the migration>`  # Migrate the db instance
+5. `npx prisma studio --port 5555`                          # validate the migration at http://localhost:5555
 
-
-# EC2 Instance Instructions
+# EC2 Instance Instructions (Back End Server)
 
 ## Update the server
-1. `git pull`
-2. `npm run build`
-3. `npm run start`
+1. `screen -ls`
+2. `screen -r one`
+3. `git pull`
+4. `npm run build`
+5. `npm run start`
 
 ## Cloudwatch Agent
 

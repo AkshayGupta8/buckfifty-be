@@ -10,8 +10,8 @@ parse_base_url "$@"
 curl -X POST "$BASE_URL/events" \
   -H "Content-Type: application/json" \
   -d '{
-  "created_by_user_id": "6a6880fa-a015-4bdd-9ba3-9aa334ec07c1",
-  "activity_id": "0cccddea-83a6-484f-bf0d-97373d6ab568",
+  "created_by_user_id": "11a36ba3-06bb-4a73-8788-85180522fe78",
+  "activity_id": "24f18a8e-0f62-41fc-9512-458d1209fa71",
   "location": "Boulder",
   "max_participants": 10,
   "timeSlots": {

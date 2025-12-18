@@ -17,7 +17,9 @@ router.post("/", async (req: Request, res: Response) => {
       Array.isArray(error.meta?.target) &&
       error.meta.target.includes("phone_number")
     ) {
-      return res.status(400).json({ error: "Phone number is already registered" });
+      return res
+        .status(400)
+        .json({ error: "Phone number is already registered" });
     }
     res.status(500).json({ error: "Failed to create user" });
   }
@@ -90,7 +92,10 @@ router.delete("/:id", async (req: Request, res: Response) => {
     res.status(204).send();
   } catch (error: any) {
     // Record not found
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
       return res.status(404).json({ error: "User not found" });
     }
 
@@ -145,7 +150,9 @@ router.post("/:userId/verify-code", async (req: Request, res: Response) => {
   const { code } = req.body;
 
   if (!code || typeof code !== "string") {
-    return res.status(400).json({ error: "Code is required and must be a string" });
+    return res
+      .status(400)
+      .json({ error: "Code is required and must be a string" });
   }
 
   try {
@@ -175,39 +182,45 @@ router.post("/:userId/verify-code", async (req: Request, res: Response) => {
 });
 
 // POST /users/:userId/send-contact-card
-router.post("/:userId/share-contact-card", async (req: Request, res: Response) => {
-  const { userId } = req.params;
+router.post(
+  "/:userId/share-contact-card",
+  async (req: Request, res: Response) => {
+    const { userId } = req.params;
 
-  try {
-    const user = await prisma.user.findUnique({
-      where: { user_id: userId },
-    });
+    try {
+      const user = await prisma.user.findUnique({
+        where: { user_id: userId },
+      });
 
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      if (!user.phone_number) {
+        return res.status(400).json({ error: "User has no phone number" });
+      }
+
+      const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+      if (!publicBaseUrl) {
+        return res.status(500).json({ error: "PUBLIC_BASE_URL is not set" });
+      }
+
+      // Existing vCard file hosted via express.static at /public
+      const vcardPath = "/public/Buckfifty%20AI%20Assistant.vcf";
+      const mediaUrl = new URL(vcardPath, publicBaseUrl).toString();
+
+      const messageBody =
+        mediaUrl +
+        "\n" +
+        "Hello! I'm Buckfifty, your AI Assistant. I'm looking forward to connect you with your Homies!\n\nSave Buckfifty to your contacts";
+      const messageSid = await sendSms(user.phone_number, messageBody);
+
+      res.json({ message: "Contact Card sent", messageSid, mediaUrl });
+    } catch (error) {
+      console.error("Error in send-contact-card endpoint:", error);
+      res.status(500).json({ error: "Failed to send contact card" });
     }
-
-    if (!user.phone_number) {
-      return res.status(400).json({ error: "User has no phone number" });
-    }
-
-    const publicBaseUrl = process.env.PUBLIC_BASE_URL;
-    if (!publicBaseUrl) {
-      return res.status(500).json({ error: "PUBLIC_BASE_URL is not set" });
-    }
-
-    // Existing vCard file hosted via express.static at /public
-    const vcardPath = "/public/Buckfifty%20AI%20Assistant.vcf";
-    const mediaUrl = new URL(vcardPath, publicBaseUrl).toString();
-
-    const messageBody = "Hello! I'm Buckfifty, your AI Assistant. I'm looking forward to connect you with your Homies!\n\nSave Buckfifty to your contacts";
-    const messageSid = await sendMms(user.phone_number, messageBody, mediaUrl);
-
-    res.json({ message: "Contact Card sent", messageSid, mediaUrl });
-  } catch (error) {
-    console.error("Error in send-contact-card endpoint:", error);
-    res.status(500).json({ error: "Failed to send contact card" });
   }
-});
+);
 
 export default router;

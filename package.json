@@ -6,7 +6,7 @@
         "clean": "rm -rf dist",
         "build": "tsc",
         "start": "node dist/index.js",
-        "server": "npm run clean && npm install && npm run build && npx prisma generate && npm run start",
+        "server": "npm run clean && npm install && npm run prisma:generate && npm run build && npm run start",
         "dev": "DEV=1 ts-node-dev --respawn --transpile-only src/index.ts",
         "prisma:generate": "prisma generate",
         "prisma:migrate": "prisma migrate dev"

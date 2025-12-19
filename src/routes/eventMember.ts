@@ -65,6 +65,10 @@ router.get("/by-event/:eventId", async (req: Request, res: Response) => {
   try {
     const eventMembers = await prisma.eventMember.findMany({
       where: { event_id: req.params.eventId },
+      include: {
+        event: true,
+        member: true,
+      },
     });
     res.json(eventMembers);
   } catch (error) {
@@ -77,6 +81,10 @@ router.get("/by-member/:memberId", async (req: Request, res: Response) => {
   try {
     const eventMembers = await prisma.eventMember.findMany({
       where: { member_id: req.params.memberId },
+      include: {
+        event: true,
+        member: true,
+      },
     });
     res.json(eventMembers);
   } catch (error) {

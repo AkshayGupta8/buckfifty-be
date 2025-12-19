@@ -46,6 +46,9 @@ export function buildEventConfirmationSms(args: {
   preferredNames: string[];
   /** Max number of homies to invite (does NOT include the user). */
   maxHomies: number;
+
+  /** Optional note/instruction to share with invited members. */
+  inviteMessage?: string | null;
 }): string {
   const when = isSameLocalDay(args.start, args.end, args.timeZone)
     ? `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
@@ -73,6 +76,9 @@ export function buildEventConfirmationSms(args: {
     who = `Inviting: ${preferred.join(", ")}`;
   }
 
+  const note = (args.inviteMessage ?? "").trim();
+  const noteLine = note.length ? `\nNote for homies: ${note}` : "";
+
   // Keep it short for SMS.
-  return `Locked in: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${who}`;
+  return `Locked in: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${who}${noteLine}`;
 }

@@ -89,6 +89,12 @@ model Event {
   activity_id        String? @db.Uuid
   location           String?
 
+  /**
+   * Free-text note/instruction to share with invited members.
+   * Examples: "Wear black", "Bring water", "Meet by the north entrance".
+   */
+  invite_message String? @db.Text
+
   /** Max number of homies (does NOT include the user). */
   max_participants Int?
 

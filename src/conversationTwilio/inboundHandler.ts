@@ -8,6 +8,10 @@ import {
   analyzeConversationLocation,
   buildLocationAnalyzerSystemPrompt,
 } from "./analyzers/locationAnalyzer";
+import {
+  analyzeConversationInviteMessage,
+  buildInviteMessageAnalyzerSystemPrompt,
+} from "./analyzers/inviteMessageAnalyzer";
 import { extractAndNormalizeEventTimesFromConversation } from "./analyzers/timeExtractor";
 import { asConversationState, parseIsoDateOrNull } from "./domain/conversationState";
 import {
@@ -122,15 +126,17 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
 
   const locationAnalyzerSystemPrompt = buildLocationAnalyzerSystemPrompt();
   const homiesAnalyzerSystemPrompt = buildHomiesAnalyzerSystemPrompt({ homiesList });
+  const inviteMessageAnalyzerSystemPrompt = buildInviteMessageAnalyzerSystemPrompt();
 
   logger.debug?.("Conversation messages", { count: messages.length });
 
   const analysisResults = await Promise.allSettled([
     analyzeConversationLocation(messages, locationAnalyzerSystemPrompt),
     analyzeConversationHomies(messages, homiesAnalyzerSystemPrompt, homieNames),
+    analyzeConversationInviteMessage(messages, inviteMessageAnalyzerSystemPrompt),
   ]);
 
-  const [locationRes, homiesRes] = analysisResults;
+  const [locationRes, homiesRes, inviteMessageRes] = analysisResults;
 
   const locationAnalysis =
     locationRes.status === "fulfilled"
@@ -151,9 +157,20 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
           rawText: String(homiesRes.reason),
         };
 
+  const inviteMessageAnalysis =
+    inviteMessageRes.status === "fulfilled"
+      ? inviteMessageRes.value
+      : {
+          inviteMessageProvided: false,
+          inviteMessage: null,
+          rawText: String(inviteMessageRes.reason),
+        };
+
   logger.info("locationAnalysis", locationAnalysis);
   logger.info("homiesAnalysis", homiesAnalysis);
+  logger.info("inviteMessageAnalysis", inviteMessageAnalysis);
 
+  // Invite-message extraction is best-effort; do not block event creation on it.
   const allAnalyzersSucceeded = locationRes.status === "fulfilled" && homiesRes.status === "fulfilled";
 
   // NOTE: even if analyzers succeeded, they may say "provided=false". We only create
@@ -319,6 +336,7 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
           created_by_user_id: user.user_id,
           activity_id: activity.activity_id,
           location: locationAnalysis.eventLocation!,
+          invite_message: inviteMessageAnalysis.inviteMessage,
           max_participants: maxHomies,
           invite_policy: invitePolicy,
         },
@@ -358,6 +376,7 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
       timeZone: user.timezone,
       preferredNames: preferredNamesForSms,
       maxHomies,
+      inviteMessage: inviteMessageAnalysis.inviteMessage,
     });
 
     const sid = await sendSms(user.phone_number, confirmation);

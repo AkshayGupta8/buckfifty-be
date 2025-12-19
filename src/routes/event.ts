@@ -11,7 +11,9 @@ router.post("/", async (req: Request, res: Response) => {
     res.status(201).json(event);
   } catch (error: any) {
     console.error("Error creating event:", error);
-    res.status(500).json({ error: "Failed to create event", details: error.message || error.toString() });
+    res
+      .status(500)
+      .json({ error: "Failed to create event", details: error.message || error.toString() });
   }
 });
 

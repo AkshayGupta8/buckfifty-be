@@ -10,6 +10,8 @@ parse_base_url "$@"
 curl -X POST "$BASE_URL/members" \
   -H "Content-Type: application/json" \
   -d '{
-  "name": "Test Member",
+  "first_name": "Test",
+  "last_name": "Member",
+  "phone_number": "(415) 555-1212",
   "user_id": "c12fe5c3-b585-423f-a242-5813a4a6eb66"
 }'

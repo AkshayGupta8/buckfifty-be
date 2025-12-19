@@ -13,4 +13,4 @@ fi
 
 USER_ID="${REMAINING_ARGS[0]}"
 
-curl -X POST "$BASE_URL/users/$USER_ID/send-code"
+curl -X POST "$BASE_URL/users/$USER_ID/share-contact-card"

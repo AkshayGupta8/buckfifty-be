@@ -20,6 +20,15 @@ import { summarizeConversationMemory } from "./memory/summarizeConversationMemor
 import { logLlmInput, logLlmOutput } from "./llm/llmLogging";
 import type { InboundTwilioMessageContext } from "./types";
 
+function deriveInvitePolicy(args: {
+  preferredCount: number;
+  maxHomies: number;
+}): "max_only" | "prioritized" | "exact" {
+  if (args.preferredCount <= 0) return "max_only";
+  if (args.preferredCount === args.maxHomies) return "exact";
+  return "prioritized";
+}
+
 const prisma = new PrismaClient();
 
 /**
@@ -279,6 +288,31 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
     const preferredMembers = explicitResolution.preferredMembers;
     const preferredNamesForSms = preferredMembers.map(fullNameForMember);
 
+    const invitePolicy = deriveInvitePolicy({
+      preferredCount: preferredMembers.length,
+      maxHomies,
+    });
+
+    // Defensive: exact-list must match capacity.
+    if (invitePolicy === "exact" && preferredMembers.length !== maxHomies) {
+      const ask = `Just to confirm — do you want to invite exactly ${preferredMembers.length} homies, or invite ${maxHomies}?`;
+      const sid = await sendSms(user.phone_number, ask);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: ask,
+          twilio_sid: sid,
+          attributes: {
+            preferredNames: preferredNamesForSms,
+            maxHomies,
+          },
+        },
+      });
+      return;
+    }
+
     const createdEvent = await prisma.$transaction(async (tx) => {
       const event = await tx.event.create({
         data: {
@@ -286,6 +320,7 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
           activity_id: activity.activity_id,
           location: locationAnalysis.eventLocation!,
           max_participants: maxHomies,
+          invite_policy: invitePolicy,
         },
       });
 
@@ -303,10 +338,11 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
       // rows for the unspecified homies.
       if (preferredMembers.length > 0) {
         await tx.eventMember.createMany({
-          data: preferredMembers.map((m) => ({
+          data: preferredMembers.map((m, idx) => ({
             event_id: event.event_id,
             member_id: m.member_id,
             status: "listed",
+            priority_rank: idx + 1,
           })),
         });
       }

@@ -15,6 +15,12 @@ enum EventMemberStatus {
   messaged
 }
 
+enum EventInvitePolicy {
+  max_only
+  prioritized
+  exact
+}
+
 enum TimeSlotStatus {
   invites
   suggested
@@ -82,7 +88,17 @@ model Event {
   created_by_user_id String  @db.Uuid
   activity_id        String? @db.Uuid
   location           String?
-  max_participants   Int?
+
+  /** Max number of homies (does NOT include the user). */
+  max_participants Int?
+
+  /**
+   * How invite constraints were specified at creation time.
+   * - max_only: "invite any N" (no explicit list)
+   * - prioritized: explicit list + capacity; fill remaining later
+   * - exact: explicit list that is the full invite list
+   */
+  invite_policy EventInvitePolicy @default(max_only)
 
   createdBy    User          @relation("EventCreatedBy", fields: [created_by_user_id], references: [user_id], onDelete: Restrict)
   activity     Activity?     @relation("ActivityEvents", fields: [activity_id], references: [activity_id], onDelete: SetNull)
@@ -99,9 +115,13 @@ model EventMember {
   member_id       String            @db.Uuid
   status          EventMemberStatus @default(listed)
 
+  /** 1-based priority order for explicitly listed homies (optional). */
+  priority_rank Int?
+
   event  Event  @relation(fields: [event_id], references: [event_id], onDelete: Cascade)
   member Member @relation(fields: [member_id], references: [member_id], onDelete: Cascade)
 
+  @@unique([event_id, member_id])
   @@index([event_id])
   @@index([member_id])
 }

@@ -5,7 +5,7 @@ import logger from "./logger";
  * OpenAI client singleton.
  *
  * Env var required:
- * - OPENAI_API_KEY
+ * - OPEN_AI_API_KEY
  */
 const apiKey = process.env.OPEN_AI_API_KEY || "";
 

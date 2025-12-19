@@ -210,10 +210,12 @@ router.post(
       const mediaUrl = new URL(vcardPath, publicBaseUrl).toString();
 
       const messageBody =
-        mediaUrl +
-        "\n" +
         "Hello! I'm Buckfifty, your AI Assistant. I'm looking forward to connect you with your Homies!\n\nSave Buckfifty to your contacts";
-      const messageSid = await sendSms(user.phone_number, messageBody);
+      const messageSid = await sendMms(
+        user.phone_number,
+        messageBody,
+        mediaUrl
+      );
 
       res.json({ message: "Contact Card sent", messageSid, mediaUrl });
     } catch (error) {

@@ -1,4 +1,4 @@
-import { PrismaClient, type EventInvitePolicy, type EventMemberStatus } from "@prisma/client";
+import { Prisma, PrismaClient, type EventInvitePolicy, type EventMemberStatus } from "@prisma/client";
 import logger from "../../utils/logger";
 import { sendSms } from "../../utils/twilioClient";
 import { fullNameForMember } from "../domain/homies";
@@ -98,16 +98,31 @@ async function persistInboundToConversation(args: {
   attributes?: any;
 }): Promise<void> {
   // messageSid could be undefined in internal calls; keep nullable.
-  await prisma.conversationMessage.create({
-    data: {
-      conversation_id: args.conversationId,
-      role: "user",
-      direction: "inbound",
-      content: args.content,
-      twilio_sid: args.messageSid,
-      attributes: args.attributes ?? undefined,
-    },
-  });
+  // Also: inbound Twilio webhooks are persisted upstream in `webhookHandler.ts`.
+  // If this function is called with the same MessageSid, ignore the dedupe violation.
+  try {
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: args.conversationId,
+        role: "user",
+        direction: "inbound",
+        content: args.content,
+        twilio_sid: args.messageSid,
+        attributes: args.attributes ?? undefined,
+      },
+    });
+  } catch (err: any) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002" &&
+      Array.isArray(err.meta?.target) &&
+      err.meta.target.includes("twilio_sid")
+    ) {
+      logger.info(`Duplicate inbound message persisted; ignoring. MessageSid=${args.messageSid}`);
+      return;
+    }
+    throw err;
+  }
 }
 
 async function inviteMembers(args: {

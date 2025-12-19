@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import type { Request, Response } from "express";
 import logger from "../utils/logger";
+import { inferActiveInvitedEventForMember } from "./coordinator/coordinator";
 import { onInboundTwilioMessage } from "./inboundHandler";
 import type { TwilioInboundWebhookBody } from "./types";
 
@@ -32,24 +33,69 @@ export async function twilioWebhookHandler(req: Request, res: Response): Promise
         return;
       }
 
-      // Find user by phone number
+      // First: treat inbound as from the user.
       const user = await prisma.user.findUnique({
         where: { phone_number: from },
         select: { user_id: true },
       });
 
-      if (!user) {
+      // If not the user, try to match a Member.
+      const member = !user
+        ? await prisma.member.findFirst({
+            where: { phone_number: from },
+            select: { member_id: true, user_id: true },
+          })
+        : null;
+
+      if (!user && !member) {
         logger.info(`Twilio inbound message from unknown number ${from}; ignoring.`);
         return;
       }
 
-      // Ensure conversation exists for this user
-      const conversation = await prisma.conversation.upsert({
-        where: { user_id: user.user_id },
-        update: {},
-        create: { user_id: user.user_id },
-        select: { conversation_id: true },
-      });
+      const senderType = user ? "user" : "member";
+      const userId = user?.user_id ?? member!.user_id;
+      const memberId = member?.member_id ?? undefined;
+
+      // Ensure conversation exists:
+      // - user => Conversation(user_id)
+      // - member => Conversation(event_id, member_id)
+      let conversation: { conversation_id: string };
+      let inferredEventId: string | undefined;
+
+      if (senderType === "user") {
+        conversation = await prisma.conversation.upsert({
+          where: { user_id: userId },
+          update: {},
+          create: { user_id: userId },
+          select: { conversation_id: true },
+        });
+      } else {
+        const inferred = await inferActiveInvitedEventForMember({ memberId: memberId! });
+        inferredEventId = inferred ?? undefined;
+        if (!inferredEventId) {
+          logger.info("Member inbound message but no active invited event found; ignoring", {
+            memberId,
+            from,
+          });
+          return;
+        }
+
+        conversation = await prisma.conversation.upsert({
+          where: {
+            event_id_member_id: {
+              event_id: inferredEventId,
+              member_id: memberId!,
+            },
+          },
+          update: {},
+          // Use unchecked create input so we don't depend on relation nested-create typing.
+          create: {
+            event_id: inferredEventId,
+            member_id: memberId!,
+          },
+          select: { conversation_id: true },
+        });
+      }
 
       // Persist message (dedupe via unique twilio_sid)
       let conversationMessageId: string | undefined;
@@ -65,6 +111,11 @@ export async function twilioWebhookHandler(req: Request, res: Response): Promise
               twilio: {
                 from,
                 to,
+              },
+              participant: {
+                type: senderType,
+                ...(memberId ? { memberId } : {}),
+                ...(inferredEventId ? { eventId: inferredEventId } : {}),
               },
             },
           },
@@ -89,13 +140,16 @@ export async function twilioWebhookHandler(req: Request, res: Response): Promise
 
       // Call custom handler
       await onInboundTwilioMessage({
-        userId: user.user_id,
+        userId,
         from,
         to,
         body: messageBody,
         messageSid,
         conversationId: conversation.conversation_id,
         conversationMessageId,
+        senderType,
+        memberId,
+        eventId: inferredEventId,
       });
     } catch (err) {
       logger.error(`Error handling Twilio inbound webhook: ${err}`);

@@ -22,6 +22,7 @@ import {
 import { buildEventConfirmationSms } from "./domain/smsFormatting";
 import { summarizeConversationMemory } from "./memory/summarizeConversationMemory";
 import { logLlmInput, logLlmOutput } from "./llm/llmLogging";
+import { onEventCreated, onMemberInboundMessage } from "./coordinator/coordinator";
 import type { InboundTwilioMessageContext } from "./types";
 
 function deriveInvitePolicy(args: {
@@ -44,7 +45,30 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
     userId: _ctx.userId,
     conversationId: _ctx.conversationId,
     messageSid: _ctx.messageSid,
+    senderType: _ctx.senderType,
+    memberId: _ctx.memberId,
+    eventId: _ctx.eventId,
   });
+
+  // Member inbound messages are handled by the coordinator (invite responses).
+  if (_ctx.senderType === "member") {
+    if (!_ctx.memberId || !_ctx.eventId) {
+      logger.warn("Member inbound message missing memberId/eventId; ignoring", {
+        conversationId: _ctx.conversationId,
+        messageSid: _ctx.messageSid,
+      });
+      return;
+    }
+
+    await onMemberInboundMessage({
+      eventId: _ctx.eventId,
+      memberId: _ctx.memberId,
+      inboundBody: _ctx.body,
+      inboundMessageSid: _ctx.messageSid,
+    });
+
+    return;
+  }
 
   const user = await prisma.user.findUnique({
     where: { user_id: _ctx.userId },
@@ -392,6 +416,15 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
           createdEventId: createdEvent.event_id,
         },
       },
+    });
+
+    // Kick off coordination (invites, escalation timers, etc) in the background.
+    setImmediate(async () => {
+      try {
+        await onEventCreated(createdEvent.event_id);
+      } catch (err: any) {
+        logger.error(`coordinator:onEventCreated failed: ${err?.message ?? err}`);
+      }
     });
 
     // After creating an event, compact conversation into durable memory + reset planning boundary.

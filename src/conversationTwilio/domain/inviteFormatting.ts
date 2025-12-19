@@ -39,11 +39,11 @@ export function buildMemberInviteSms(args: {
   const firstName = args.member.first_name.trim();
   const hello = firstName.length ? `Hi ${firstName} —` : "Hi —";
 
-  return `${hello} I'm BuckFifty (the AI assistant), texting for ${args.creatorFirstName}.\nYou're invited to ${what}.\nWhen: ${when}\nWhere: ${where}${noteLine}\nCan you make it? Reply "yes" or "no".`;
+  return `${hello} I'm BuckFifty (the AI assistant), texting for ${args.creatorFirstName}.\nYou're invited to ${what}.\nWhen: ${when}\nWhere: ${where}${noteLine}\nCan you make it? Text me back either way.`;
 }
 
 export function buildAmbiguousInviteReplySms(): string {
-  return "Just to confirm — can you make it? Reply \"yes\" or \"no\".";
+  return "Just to confirm — are you able to make it?";
 }
 
 export function buildUserNotifiedOfMemberResponseSms(args: {

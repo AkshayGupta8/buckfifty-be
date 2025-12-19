@@ -2,10 +2,23 @@ import { Twilio } from "twilio";
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID || "";
 const authToken = process.env.TWILIO_AUTH_TOKEN || "";
-const fromNumber = process.env.TWILIO_FROM_NUMBER || "";
 
-if (!accountSid || !authToken || !fromNumber) {
-  throw new Error("Twilio credentials are not set in environment variables");
+const isDev = process.env.DEV === "1";
+const fromNumber = (isDev
+  ? process.env.DEV_TWILIO_FROM_NUMBER
+  : process.env.TWILIO_FROM_NUMBER) || "";
+
+const missingVars: string[] = [];
+if (!accountSid) missingVars.push("TWILIO_ACCOUNT_SID");
+if (!authToken) missingVars.push("TWILIO_AUTH_TOKEN");
+if (!fromNumber) {
+  missingVars.push(isDev ? "DEV_TWILIO_FROM_NUMBER" : "TWILIO_FROM_NUMBER");
+}
+
+if (missingVars.length > 0) {
+  throw new Error(
+    `Twilio env vars missing: ${missingVars.join(", ")}. (DEV=${process.env.DEV || ""})`
+  );
 }
 
 const client = new Twilio(accountSid, authToken);

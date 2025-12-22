@@ -6,16 +6,33 @@ import { logLlmInput, logLlmOutput } from "../llm/llmLogging";
 export type MessageRoute = "scheduling" | "coordination";
 
 export function buildMessageRouterSystemPrompt(): string {
-  return `You are a router that decides where an inbound SMS should be handled.
+  return `You are BuckFifty's SMS message router.
+
+Context:
+- BuckFifty is an SMS-based assistant for planning events and coordinating attendance.
+- There are two possible handling routes for an inbound SMS:
+  1) "scheduling": the message is from the EVENT CREATOR (a user) planning or editing an event.
+  2) "coordination": the message is from an INVITED HOMIE (a member) responding to an invite or asking about attending.
 
 Return ONLY JSON:
 { "route": "scheduling"|"coordination", "reason": "short reason" }
 
-Guidelines:
-- "coordination" is for messages that look like invite responses (yes/no/maybe) or questions about attending.
-- "scheduling" is for the event creator planning details (location/time/homies).
-- If you are unsure, choose "scheduling".
-- Keep reason <= 120 chars.`;
+How to choose:
+- Choose "coordination" when the message is primarily about ATTENDING an invite:
+  - clear accept/decline/maybe ("yes", "i'm in", "can't", "maybe", "not sure")
+  - questions about the invite details from an attendee perspective ("what time is it?", "where is it?", "who else is going?")
+  - arrival/availability/ride/bringing something ("i'll be 10 mins late", "can i bring a friend?")
+- Choose "scheduling" when the message is primarily about CREATING/PLANNING/UPDATING an event:
+  - specifying or changing time/location
+  - selecting which homies to invite or how many
+  - writing or editing an invite note/message
+
+Ambiguity rule:
+- If unsure, choose "scheduling".
+
+Output rules:
+- reason must be <= 120 characters.
+- Do not include extra keys or any text outside the JSON object.`;
 }
 
 export async function analyzeMessageRoute(args: {

@@ -33,34 +33,102 @@ export async function twilioWebhookHandler(req: Request, res: Response): Promise
         return;
       }
 
-      // First: treat inbound as from the user.
-      const user = await prisma.user.findUnique({
+      // A phone number can belong to BOTH:
+      // - a User (event creator / scheduling)
+      // - one-or-more Members (invite responses / coordination)
+      // We must disambiguate when both exist.
+      const userByPhone = await prisma.user.findUnique({
         where: { phone_number: from },
         select: { user_id: true },
       });
 
-      // If not the user, try to match a Member.
-      const member = !user
-        ? await prisma.member.findFirst({
-            where: { phone_number: from },
-            select: { member_id: true, user_id: true },
-          })
-        : null;
+      const membersByPhone = await prisma.member.findMany({
+        where: { phone_number: from },
+        select: { member_id: true, user_id: true },
+      });
 
-      if (!user && !member) {
+      if (!userByPhone && membersByPhone.length === 0) {
         logger.info(`Twilio inbound message from unknown number ${from}; ignoring.`);
         return;
       }
 
-      const senderType = user ? "user" : "member";
-      const userId = user?.user_id ?? member!.user_id;
-      const memberId = member?.member_id ?? undefined;
+      // If any member(s) match, see if they have an active invite.
+      // If multiple matches exist, pick the soonest-starting invited event.
+      let selectedMember: { member_id: string; user_id: string } | null = null;
+      let selectedEventId: string | null = null;
+      let selectedEventStart: number = Number.POSITIVE_INFINITY;
+
+      for (const m of membersByPhone) {
+        const eventId = await inferActiveInvitedEventForMember({ memberId: m.member_id });
+        if (!eventId) continue;
+
+        const ts = await prisma.timeSlot.findFirst({
+          where: { event_id: eventId },
+          orderBy: { start_time: "asc" },
+          select: { start_time: true },
+        });
+
+        const start = ts?.start_time?.getTime() ?? Number.POSITIVE_INFINITY;
+        if (start < selectedEventStart) {
+          selectedEventStart = start;
+          selectedMember = m;
+          selectedEventId = eventId;
+        }
+      }
+
+      // Default routing (when not ambiguous):
+      // - if there's no user, it must be member (but only if we found an active invite)
+      // - if there's no active invite, it must be user
+      let senderType: "user" | "member";
+      let userId: string;
+      let memberId: string | undefined;
+      let inferredEventId: string | undefined;
+
+      if (!userByPhone) {
+        // Member-only phone number.
+        if (!selectedMember || !selectedEventId) {
+          logger.info("Member inbound message but no active invited event found; ignoring", {
+            from,
+            membersMatched: membersByPhone.length,
+          });
+          return;
+        }
+
+        senderType = "member";
+        userId = selectedMember.user_id;
+        memberId = selectedMember.member_id;
+        inferredEventId = selectedEventId;
+      } else if (!selectedMember || !selectedEventId) {
+        // User-only (or member exists but no active invite).
+        senderType = "user";
+        userId = userByPhone.user_id;
+      } else {
+        // Ambiguous: phone belongs to both a user + an invited member.
+        // Always use the message router model to decide.
+        const { analyzeMessageRoute, buildMessageRouterSystemPrompt } = await import(
+          "./analyzers/messageRouterAnalyzer"
+        );
+
+        const routeRes = await analyzeMessageRoute({
+          systemPrompt: buildMessageRouterSystemPrompt(),
+          messages: [{ role: "user", content: messageBody }],
+        });
+
+        if (routeRes.route === "coordination") {
+          senderType = "member";
+          userId = selectedMember.user_id;
+          memberId = selectedMember.member_id;
+          inferredEventId = selectedEventId;
+        } else {
+          senderType = "user";
+          userId = userByPhone.user_id;
+        }
+      }
 
       // Ensure conversation exists:
       // - user => Conversation(user_id)
       // - member => Conversation(event_id, member_id)
       let conversation: { conversation_id: string };
-      let inferredEventId: string | undefined;
 
       if (senderType === "user") {
         conversation = await prisma.conversation.upsert({
@@ -70,27 +138,17 @@ export async function twilioWebhookHandler(req: Request, res: Response): Promise
           select: { conversation_id: true },
         });
       } else {
-        const inferred = await inferActiveInvitedEventForMember({ memberId: memberId! });
-        inferredEventId = inferred ?? undefined;
-        if (!inferredEventId) {
-          logger.info("Member inbound message but no active invited event found; ignoring", {
-            memberId,
-            from,
-          });
-          return;
-        }
-
         conversation = await prisma.conversation.upsert({
           where: {
             event_id_member_id: {
-              event_id: inferredEventId,
+              event_id: inferredEventId!,
               member_id: memberId!,
             },
           },
           update: {},
           // Use unchecked create input so we don't depend on relation nested-create typing.
           create: {
-            event_id: inferredEventId,
+            event_id: inferredEventId!,
             member_id: memberId!,
           },
           select: { conversation_id: true },

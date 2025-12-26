@@ -40,18 +40,14 @@ You MUST respond only in this JSON format:
   "maxHomies": number|null
 }
 
-The user has FOUR valid ways to specify invites:
-1) Exact list: "Invite Jake and Priya" => homies=["Jake ...", "Priya ..."], maxHomies=null
-2) Any N: "Any 3 of my homies" / "Invite 3" => homies=[], maxHomies=3
-3) Partial + max: "Definitely Jake, and any others up to 3" => homies=["Jake ..."], maxHomies=3
-4) Partial + implied-min: "Invite Jake and at least one other homie" => homies=["Jake ..."], maxHomies=2
+Instructions:
+- **Max Only**: User says "Invite 3" or "Any 3" -> homies=[], maxHomies=3.
+- **Exact List**: User says "Invite Jake" (no count) -> homies=["Jake ..."], maxHomies=null.
+- **Total Capacity**: User says "Invite 1 person. Invite Jake." (names + total count) -> homies=["Jake ..."], maxHomies=1.
+- **Additional Capacity**: User says "Invite Jake and 1 other" (names + added count) -> homies=["Jake ..."], maxHomies=2 (1 name + 1 other).
+- **Fallback**: If no homies or count specified -> homies=[], maxHomies=null.
 
-Rules:
-- If the user ONLY provides a max ("any 3", "invite 3"), do NOT pick names; return an empty homies array and set maxHomies.
-- If the user provides some names AND a max, return those names in homies and set maxHomies.
-- If the user provides names WITHOUT a max, treat it as an exact list: return those names and maxHomies=null.
-- If the user provides names PLUS a phrase like "at least one other", "one more", "someone else", or "another homie", treat it as Partial + implied-min: set maxHomies to the minimum implied total (named count + 1).
-- If neither names nor a max are provided, return an empty homies array and maxHomies null.
+Constraints:
 - Do not invent names.
 - Homies may ONLY be selected from this list (verbatim):
 ${args.homiesList}`;

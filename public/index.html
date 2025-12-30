@@ -1,234 +1,232 @@
 <!doctype html>
 <html lang="en">
-  <head>
+
+<head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BuckFifty API</title>
     <style>
-      :root {
-        --bg1: #fff6fb;
-        --bg2: #eef7ff;
-        --card: rgba(255, 255, 255, 0.82);
-        --text: #1f2937;
-        --muted: #6b7280;
-        --accent: #ff4db8;
-        --accent2: #4da3ff;
-        --shadow: 0 18px 60px rgba(17, 24, 39, 0.12);
-        --radius: 22px;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
-          "Apple Color Emoji", "Segoe UI Emoji";
-        color: var(--text);
-        background:
-          radial-gradient(1200px 600px at 15% 10%, rgba(255, 77, 184, 0.18), transparent 60%),
-          radial-gradient(900px 500px at 85% 20%, rgba(77, 163, 255, 0.2), transparent 55%),
-          linear-gradient(140deg, var(--bg1), var(--bg2));
-      }
-
-      .card {
-        width: min(860px, calc(100vw - 40px));
-        background: var(--card);
-        border: 1px solid rgba(255, 255, 255, 0.55);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow);
-        backdrop-filter: blur(10px);
-        padding: 28px;
-        position: relative;
-        overflow: hidden;
-      }
-
-      .sparkle {
-        position: absolute;
-        inset: -120px -120px auto auto;
-        width: 260px;
-        height: 260px;
-        background: conic-gradient(
-          from 180deg,
-          rgba(255, 77, 184, 0.2),
-          rgba(77, 163, 255, 0.2),
-          rgba(255, 77, 184, 0.2)
-        );
-        filter: blur(0.5px);
-        border-radius: 999px;
-        transform: rotate(12deg);
-        animation: floaty 6s ease-in-out infinite;
-      }
-
-      @keyframes floaty {
-        0%,
-        100% {
-          transform: translate3d(0, 0, 0) rotate(12deg);
+        :root {
+            --bg1: #fff6fb;
+            --bg2: #eef7ff;
+            --card: rgba(255, 255, 255, 0.82);
+            --text: #1f2937;
+            --muted: #6b7280;
+            --accent: #ff4db8;
+            --accent2: #4da3ff;
+            --shadow: 0 18px 60px rgba(17, 24, 39, 0.12);
+            --radius: 22px;
         }
-        50% {
-          transform: translate3d(-10px, 12px, 0) rotate(22deg);
+
+        * {
+            box-sizing: border-box;
         }
-      }
 
-      h1 {
-        margin: 0 0 8px;
-        font-size: 34px;
-        letter-spacing: -0.02em;
-      }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+                "Apple Color Emoji", "Segoe UI Emoji";
+            color: var(--text);
+            background:
+                radial-gradient(1200px 600px at 15% 10%, rgba(255, 77, 184, 0.18), transparent 60%),
+                radial-gradient(900px 500px at 85% 20%, rgba(77, 163, 255, 0.2), transparent 55%),
+                linear-gradient(140deg, var(--bg1), var(--bg2));
+        }
 
-      .subtitle {
-        margin: 0 0 18px;
-        color: var(--muted);
-        line-height: 1.45;
-      }
+        .card {
+            width: min(860px, calc(100vw - 40px));
+            background: var(--card);
+            border: 1px solid rgba(255, 255, 255, 0.55);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(10px);
+            padding: 28px;
+            position: relative;
+            overflow: hidden;
+        }
 
-      .pill-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin: 14px 0 20px;
-      }
+        .sparkle {
+            position: absolute;
+            inset: -120px -120px auto auto;
+            width: 260px;
+            height: 260px;
+            background: conic-gradient(from 180deg,
+                    rgba(255, 77, 184, 0.2),
+                    rgba(77, 163, 255, 0.2),
+                    rgba(255, 77, 184, 0.2));
+            filter: blur(0.5px);
+            border-radius: 999px;
+            transform: rotate(12deg);
+            animation: floaty 6s ease-in-out infinite;
+        }
 
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        border-radius: 999px;
-        border: 1px solid rgba(17, 24, 39, 0.08);
-        background: rgba(255, 255, 255, 0.7);
-        font-size: 13px;
-        color: var(--text);
-      }
+        @keyframes floaty {
 
-      .pill b {
-        font-weight: 700;
-        color: #111827;
-      }
+            0%,
+            100% {
+                transform: translate3d(0, 0, 0) rotate(12deg);
+            }
 
-      .links {
-        margin: 0;
-        padding: 0;
-        list-style: none;
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-        gap: 12px;
-      }
+            50% {
+                transform: translate3d(-10px, 12px, 0) rotate(22deg);
+            }
+        }
 
-      .link {
-        display: block;
-        text-decoration: none;
-        padding: 14px 14px;
-        border-radius: 16px;
-        border: 1px solid rgba(17, 24, 39, 0.08);
-        background: rgba(255, 255, 255, 0.66);
-        transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
-      }
+        h1 {
+            margin: 0 0 8px;
+            font-size: 34px;
+            letter-spacing: -0.02em;
+        }
 
-      .link:hover {
-        transform: translateY(-1px);
-        border-color: rgba(255, 77, 184, 0.35);
-        box-shadow: 0 12px 30px rgba(17, 24, 39, 0.1);
-      }
+        .subtitle {
+            margin: 0 0 18px;
+            color: var(--muted);
+            line-height: 1.45;
+        }
 
-      .link .path {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-          "Courier New", monospace;
-        font-size: 13px;
-        color: #111827;
-      }
+        .pill-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 14px 0 20px;
+        }
 
-      .link .hint {
-        margin-top: 6px;
-        font-size: 13px;
-        color: var(--muted);
-      }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            border: 1px solid rgba(17, 24, 39, 0.08);
+            background: rgba(255, 255, 255, 0.7);
+            font-size: 13px;
+            color: var(--text);
+        }
 
-      .footer {
-        margin-top: 18px;
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        justify-content: space-between;
-        flex-wrap: wrap;
-        color: var(--muted);
-        font-size: 12px;
-      }
+        .pill b {
+            font-weight: 700;
+            color: #111827;
+        }
 
-      .heart {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 3px;
-        background: linear-gradient(135deg, var(--accent), var(--accent2));
-        transform: rotate(45deg);
-        position: relative;
-        margin: 0 6px;
-      }
+        .links {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+        }
 
-      .heart:before,
-      .heart:after {
-        content: "";
-        position: absolute;
-        width: 10px;
-        height: 10px;
-        background: inherit;
-        border-radius: 50%;
-      }
+        .link {
+            display: block;
+            text-decoration: none;
+            padding: 14px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(17, 24, 39, 0.08);
+            background: rgba(255, 255, 255, 0.66);
+            transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+        }
 
-      .heart:before {
-        left: -5px;
-        top: 0;
-      }
-      .heart:after {
-        left: 0;
-        top: -5px;
-      }
+        .link:hover {
+            transform: translateY(-1px);
+            border-color: rgba(255, 77, 184, 0.35);
+            box-shadow: 0 12px 30px rgba(17, 24, 39, 0.1);
+        }
 
-      code {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-          "Courier New", monospace;
-      }
+        .link .path {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+                "Courier New", monospace;
+            font-size: 13px;
+            color: #111827;
+        }
+
+        .link .hint {
+            margin-top: 6px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .footer {
+            margin-top: 18px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .heart {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 3px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            transform: rotate(45deg);
+            position: relative;
+            margin: 0 6px;
+        }
+
+        .heart:before,
+        .heart:after {
+            content: "";
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: inherit;
+            border-radius: 50%;
+        }
+
+        .heart:before {
+            left: -5px;
+            top: 0;
+        }
+
+        .heart:after {
+            left: 0;
+            top: -5px;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+                "Courier New", monospace;
+        }
     </style>
-  </head>
-  <body>
+</head>
+
+<body>
     <main class="card">
-      <div class="sparkle" aria-hidden="true"></div>
-      <h1>Welcome to BuckFifty 🏀</h1>
-      <p class="subtitle">
-        Your friendly little backend API is up and running. Grab a route, sip something tasty,
-        and have a lovely day.
-      </p>
+        <div class="sparkle" aria-hidden="true"></div>
+        <h1>Welcome to BuckFifty</h1>
+        <p class="subtitle">
+            Your backend API is up and running
+        </p>
 
-      <div class="pill-row" aria-label="Server details">
-        <span class="pill">✨ <b>status</b>: ok</span>
-        <span class="pill">🕒 <b>server time</b>: <span id="serverTime">loading…</span></span>
-      </div>
+        <div class="pill-row" aria-label="Server details">
+            <span class="pill">✨ <b>status</b>: ok</span>
+            <span class="pill">🕒 <b>server time</b>: <span id="serverTime">loading…</span></span>
+        </div>
 
-      <ul class="links" aria-label="Handy links">
-        <li>
-          <a class="link" href="/echo?message=Welcome%20to%20Buckfifty">
-            <div class="path">GET /echo?message=hi%20bestie</div>
-            <div class="hint">Quick test endpoint</div>
-          </a>
-        </li>
-      </ul>
-
-      <div class="footer">
-        <span>Made with <span class="heart" aria-hidden="true"></span> and Express</span>
-        <span>Tip: set <code>PORT</code> or <code>DEV=1</code> to run locally</span>
-      </div>
+        <ul class="links" aria-label="Handy links">
+            <li>
+                <a class="link" href="/echo?message=Welcome%20to%20Buckfifty">
+                    <div class="path">GET /echo?message=hi%20bestie</div>
+                    <div class="hint">Quick test endpoint</div>
+                </a>
+            </li>
+        </ul>
     </main>
 
     <script>
-      // This is client-side time (useful in dev / quick sanity checks).
-      // If you'd rather show server time, we can add a tiny JSON endpoint later.
-      const el = document.getElementById('serverTime');
-      if (el) el.textContent = new Date().toISOString();
+        // This is client-side time (useful in dev / quick sanity checks).
+        // If you'd rather show server time, we can add a tiny JSON endpoint later.
+        const el = document.getElementById('serverTime');
+        if (el) el.textContent = new Date().toISOString();
     </script>
-  </body>
+</body>
+
 </html>

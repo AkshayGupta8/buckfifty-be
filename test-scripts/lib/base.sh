@@ -16,7 +16,7 @@
 set -euo pipefail
 
 DEFAULT_BASE_URL="http://localhost:3000"
-PROD_BASE_URL="http://new-be.buckfifty-ai-herdmanager.click"
+PROD_BASE_URL="https://api.buckfifty-ai-herdmanager.click"
 
 print_test_scripts_help() {
   cat <<'EOF'

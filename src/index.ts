@@ -54,6 +54,10 @@ app.use("/eventMembers", eventMemberRouter);
 app.use("/timeSlots", timeSlotRouter);
 app.use("/conversations", conversationRouter);
 
+app.get("/", (req: express.Request, res: express.Response) => {
+  res.status(200).sendFile(path.join(process.cwd(), "public", "index.html"));
+});
+
 app.get("/echo", (req: express.Request, res: express.Response) => {
   const message = req.query.message || "Hello from echo endpoint!";
   res.json({ echo: message });

@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import express from "express";
 import { PrismaClient } from "@prisma/client";
-import logger, { asyncLocalStorage } from "./utils/logger";
+import logger, { asyncLocalStorage, setLogContext } from "./utils/logger";
 import { v4 as uuidv4 } from "uuid";
 import path from "path";
 
@@ -19,10 +19,42 @@ const prisma = new PrismaClient();
 
 // Middleware to assign a unique request ID and run the request in AsyncLocalStorage context
 app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const requestId = uuidv4();
-  asyncLocalStorage.run(new Map([["requestId", requestId]]), () => {
-    next();
-  });
+  const requestId = (req.header("x-request-id") || req.header("x-amzn-trace-id") || "")
+    .toString()
+    .trim();
+
+  const finalRequestId = requestId || uuidv4();
+  const start = Date.now();
+
+  asyncLocalStorage.run(
+    {
+      requestId: finalRequestId,
+      method: req.method,
+      path: req.url,
+    },
+    () => {
+      // Add/override any context later in the request.
+      setLogContext({ method: req.method, path: req.url });
+
+      logger.info("http.request", {
+        method: req.method,
+        path: req.url,
+        // Keep body logging opt-in; Twilio payloads can be helpful.
+        ...(process.env.LOG_HTTP_BODY === "1" ? { body: req.body } : {}),
+      });
+
+      res.on("finish", () => {
+        logger.info("http.response", {
+          method: req.method,
+          path: req.url,
+          statusCode: res.statusCode,
+          durationMs: Date.now() - start,
+        });
+      });
+
+      next();
+    }
+  );
 });
 
 // Twilio webhooks POST as application/x-www-form-urlencoded by default
@@ -33,18 +65,7 @@ app.use(express.json());
 // Example: GET /public/Buckfifty%20AI%20Assistant.vcf
 app.use("/public", express.static(path.join(process.cwd(), "public")));
 
-app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
-  logger.info(`Incoming request: ${req.method} ${req.url} - Body: ${JSON.stringify(req.body)}`);
-
-  // Hook into res.send to log response body
-  const originalSend = res.send.bind(res);
-  res.send = (body?: any): express.Response => {
-    logger.info(`Response for ${req.method} ${req.url} - Status: ${res.statusCode} - Body: ${body}`);
-    return originalSend(body);
-  };
-
-  next();
-});
+// NOTE: request/response logging is handled in the requestId middleware above.
 
 app.use("/users", userRouter);
 app.use("/activities", activityRouter);

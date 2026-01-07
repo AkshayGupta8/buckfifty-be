@@ -1,9 +1,10 @@
 import { chat, type ChatMessage } from "../../utils/openAiClient";
 import logger from "../../utils/logger";
 import { isNonEmptyString, parseJsonFromLLMText } from "../llm/llmJson";
-import { logLlmInput, logLlmOutput } from "../llm/llmLogging";
 
-function inferImpliedAdditionalCountFromRecentUserText(messages: ChatMessage[]): number {
+function inferImpliedAdditionalCountFromRecentUserText(
+  messages: ChatMessage[]
+): number {
   // Look at the most recent user text to see if they implied "and at least one other / another / someone else".
   // If present, we interpret it as +1 additional beyond the explicitly named homies.
   const recentUserText = messages
@@ -31,7 +32,9 @@ function inferImpliedAdditionalCountFromRecentUserText(messages: ChatMessage[]):
   return patterns.some((p) => p.test(recentUserText)) ? 1 : 0;
 }
 
-export function buildHomiesAnalyzerSystemPrompt(args: { homiesList: string }): string {
+export function buildHomiesAnalyzerSystemPrompt(args: {
+  homiesList: string;
+}): string {
   return `You are an assistant that extracts which homies the user wants to invite.
 
 You MUST respond only in this JSON format:
@@ -66,15 +69,8 @@ export async function analyzeConversationHomies(
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
   try {
-    logLlmInput({
-      tag: "analyzeConversationHomies",
-      model,
-      temperature: 0.0,
-      system: systemPrompt,
-      messages,
-    });
-
     const { text } = await chat({
+      tag: "analyzeConversationHomies",
       system: systemPrompt,
       messages,
       model,
@@ -82,7 +78,6 @@ export async function analyzeConversationHomies(
     });
 
     const raw = (text ?? "").trim();
-    logLlmOutput({ tag: "analyzeConversationHomies", text: raw });
 
     const parsed = parseJsonFromLLMText(raw);
 
@@ -105,7 +100,10 @@ export async function analyzeConversationHomies(
     );
 
     let maxHomies: number | null = null;
-    if (typeof parsed.maxHomies === "number" && Number.isFinite(parsed.maxHomies)) {
+    if (
+      typeof parsed.maxHomies === "number" &&
+      Number.isFinite(parsed.maxHomies)
+    ) {
       maxHomies = Math.trunc(parsed.maxHomies);
     } else if (typeof parsed.maxHomies === "string") {
       const n = Number.parseInt(parsed.maxHomies, 10);
@@ -120,7 +118,8 @@ export async function analyzeConversationHomies(
     // If the model forgot to set maxHomies, but the user implied “and at least one other”,
     // infer the minimum implied total.
     if (maxHomies === null && normalizedHomies.length > 0) {
-      const impliedAdditional = inferImpliedAdditionalCountFromRecentUserText(messages);
+      const impliedAdditional =
+        inferImpliedAdditionalCountFromRecentUserText(messages);
       if (impliedAdditional > 0) {
         maxHomies = normalizedHomies.length + impliedAdditional;
       }

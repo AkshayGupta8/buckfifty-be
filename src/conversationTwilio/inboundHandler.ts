@@ -3,7 +3,10 @@ import type { ChatMessage } from "../utils/openAiClient";
 import { chat } from "../utils/openAiClient";
 import logger from "../utils/logger";
 import { sendSms } from "../utils/twilioClient";
-import { analyzeConversationHomies, buildHomiesAnalyzerSystemPrompt } from "./analyzers/homiesAnalyzer";
+import {
+  analyzeConversationHomies,
+  buildHomiesAnalyzerSystemPrompt,
+} from "./analyzers/homiesAnalyzer";
 import {
   analyzeConversationLocation,
   buildLocationAnalyzerSystemPrompt,
@@ -13,7 +16,10 @@ import {
   buildInviteMessageAnalyzerSystemPrompt,
 } from "./analyzers/inviteMessageAnalyzer";
 import { extractAndNormalizeEventTimesFromConversation } from "./analyzers/timeExtractor";
-import { asConversationState, parseIsoDateOrNull } from "./domain/conversationState";
+import {
+  asConversationState,
+  parseIsoDateOrNull,
+} from "./domain/conversationState";
 import {
   computeMaxParticipantsTotal,
   fullNameForMember,
@@ -21,8 +27,10 @@ import {
 } from "./domain/homies";
 import { buildEventConfirmationSms } from "./domain/smsFormatting";
 import { summarizeConversationMemory } from "./memory/summarizeConversationMemory";
-import { logLlmInput, logLlmOutput } from "./llm/llmLogging";
-import { onEventCreated, onMemberInboundMessage } from "./coordinator/coordinator";
+import {
+  onEventCreated,
+  onMemberInboundMessage,
+} from "./coordinator/coordinator";
 import type { InboundTwilioMessageContext } from "./types";
 
 function deriveInvitePolicy(args: {
@@ -40,7 +48,9 @@ const prisma = new PrismaClient();
  * Hook point: implement whatever you want to happen after we receive + store
  * an inbound Twilio message.
  */
-export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext): Promise<void> {
+export async function onInboundTwilioMessage(
+  _ctx: InboundTwilioMessageContext
+): Promise<void> {
   logger.info("Inbound Twilio message", {
     userId: _ctx.userId,
     conversationId: _ctx.conversationId,
@@ -98,10 +108,14 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
     .map((h) => `${h.first_name} ${h.last_name}`.trim())
     .filter((name) => name.length > 0);
 
-  const homiesList = homieNames.length ? homieNames.map((name) => `- ${name}`).join("\n") : "(no homies yet)";
+  const homiesList = homieNames.length
+    ? homieNames.map((name) => `- ${name}`).join("\n")
+    : "(no homies yet)";
 
   if (!conversation) {
-    throw new Error(`No conversation found for conversationId=${_ctx.conversationId}`);
+    throw new Error(
+      `No conversation found for conversationId=${_ctx.conversationId}`
+    );
   }
 
   if (!user.phone_number) {
@@ -149,15 +163,21 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
     : recentMessages;
 
   const locationAnalyzerSystemPrompt = buildLocationAnalyzerSystemPrompt();
-  const homiesAnalyzerSystemPrompt = buildHomiesAnalyzerSystemPrompt({ homiesList });
-  const inviteMessageAnalyzerSystemPrompt = buildInviteMessageAnalyzerSystemPrompt();
+  const homiesAnalyzerSystemPrompt = buildHomiesAnalyzerSystemPrompt({
+    homiesList,
+  });
+  const inviteMessageAnalyzerSystemPrompt =
+    buildInviteMessageAnalyzerSystemPrompt();
 
   logger.debug?.("Conversation messages", { count: messages.length });
 
   const analysisResults = await Promise.allSettled([
     analyzeConversationLocation(messages, locationAnalyzerSystemPrompt),
     analyzeConversationHomies(messages, homiesAnalyzerSystemPrompt, homieNames),
-    analyzeConversationInviteMessage(messages, inviteMessageAnalyzerSystemPrompt),
+    analyzeConversationInviteMessage(
+      messages,
+      inviteMessageAnalyzerSystemPrompt
+    ),
   ]);
 
   const [locationRes, homiesRes, inviteMessageRes] = analysisResults;
@@ -195,7 +215,8 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
   logger.info("inviteMessageAnalysis", inviteMessageAnalysis);
 
   // Invite-message extraction is best-effort; do not block event creation on it.
-  const allAnalyzersSucceeded = locationRes.status === "fulfilled" && homiesRes.status === "fulfilled";
+  const allAnalyzersSucceeded =
+    locationRes.status === "fulfilled" && homiesRes.status === "fulfilled";
 
   // NOTE: even if analyzers succeeded, they may say "provided=false". We only create
   // when the extracted values pass our completion gate.
@@ -209,7 +230,10 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
     const preferredNames = homiesAnalysis.homies ?? [];
 
     // max_participants is homies-only (does NOT include the user)
-    let maxHomies = computeMaxParticipantsTotal(homiesAnalysis.maxHomies, homiesAnalysis.homies);
+    let maxHomies = computeMaxParticipantsTotal(
+      homiesAnalysis.maxHomies,
+      homiesAnalysis.homies
+    );
 
     if (maxHomies === null) {
       const ask = "How many homies should I invite?";
@@ -249,10 +273,13 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
     // If we have fewer onboarded homies than needed, cap to what's available.
     const desiredMemberCount = maxHomies;
     if (desiredMemberCount > homies.length) {
-      logger.info("Capping max_participants because not enough homies onboarded", {
-        requestedMaxHomies: maxHomies,
-        availableHomies: homies.length,
-      });
+      logger.info(
+        "Capping max_participants because not enough homies onboarded",
+        {
+          requestedMaxHomies: maxHomies,
+          availableHomies: homies.length,
+        }
+      );
       maxHomies = homies.length;
     }
 
@@ -276,15 +303,18 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
       return;
     }
 
-    const normalizedTimes = await extractAndNormalizeEventTimesFromConversation({
-      userTimezone: user.timezone,
-      location: locationAnalysis.eventLocation!,
-      messages,
-    });
+    const normalizedTimes = await extractAndNormalizeEventTimesFromConversation(
+      {
+        userTimezone: user.timezone,
+        location: locationAnalysis.eventLocation!,
+        messages,
+      }
+    );
 
     if (!normalizedTimes.ok) {
       logger.info("Time normalization failed", normalizedTimes);
-      const ask = "I couldn’t confirm the time.\nWhat exact start + end time should I use?";
+      const ask =
+        "I couldn’t confirm the time.\nWhat exact start + end time should I use?";
       const sid = await sendSms(user.phone_number, ask);
       await prisma.conversationMessage.create({
         data: {
@@ -423,7 +453,9 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
       try {
         await onEventCreated(createdEvent.event_id);
       } catch (err: any) {
-        logger.error(`coordinator:onEventCreated failed: ${err?.message ?? err}`);
+        logger.error(
+          `coordinator:onEventCreated failed: ${err?.message ?? err}`
+        );
       }
     });
 
@@ -440,7 +472,9 @@ export async function onInboundTwilioMessage(_ctx: InboundTwilioMessageContext):
     });
 
     const baseState = asConversationState(conversation.state);
-    const nextState = { ...(baseState as unknown as Prisma.JsonObject) } as Prisma.JsonObject;
+    const nextState = {
+      ...(baseState as unknown as Prisma.JsonObject),
+    } as Prisma.JsonObject;
 
     // Planning/session bookkeeping
     nextState.lastCreatedEventId = createdEvent.event_id;
@@ -508,15 +542,8 @@ Once location, start time, and homie selection (or max count) are collected, con
 
     const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
-    logLlmInput({
-      tag: "assistantReply",
-      model,
-      temperature: 0.3,
-      system,
-      messages,
-    });
-
     const { text } = await chat({
+      tag: "assistantReply",
       system,
       messages,
       model,
@@ -524,16 +551,14 @@ Once location, start time, and homie selection (or max count) are collected, con
     });
 
     const reply = (text ?? "").trim();
-    logLlmOutput({ tag: "assistantReply", text: reply });
 
-    console.log("=------------------=");
-    console.log("=------------------=");
-    console.log(reply);
-    console.log("=------------------=");
-    console.log("=------------------=");
+    logger.info("assistant.reply.generated", { reply });
 
     // Send reply to the user via SMS
-    const outboundSid = await sendSms(user.phone_number, reply || "(no response)");
+    const outboundSid = await sendSms(
+      user.phone_number,
+      reply || "(no response)"
+    );
 
     // Persist outbound assistant message to keep the conversation history consistent.
     await prisma.conversationMessage.create({

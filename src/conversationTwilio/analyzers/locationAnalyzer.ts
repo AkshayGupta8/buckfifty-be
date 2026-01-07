@@ -1,7 +1,6 @@
 import { chat, type ChatMessage } from "../../utils/openAiClient";
 import logger from "../../utils/logger";
 import { parseJsonFromLLMText } from "../llm/llmJson";
-import { logLlmInput, logLlmOutput } from "../llm/llmLogging";
 
 export function buildLocationAnalyzerSystemPrompt(): string {
   return `You are an assistant that checks if the user provided the event location in the conversation.
@@ -30,15 +29,8 @@ export async function analyzeConversationLocation(
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
   try {
-    logLlmInput({
-      tag: "analyzeConversationLocation",
-      model,
-      temperature: 0.0,
-      system: systemPrompt,
-      messages,
-    });
-
     const { text } = await chat({
+      tag: "analyzeConversationLocation",
       system: systemPrompt,
       messages,
       model,
@@ -46,7 +38,6 @@ export async function analyzeConversationLocation(
     });
 
     const raw = (text ?? "").trim();
-    logLlmOutput({ tag: "analyzeConversationLocation", text: raw });
 
     const parsed = parseJsonFromLLMText(raw);
 

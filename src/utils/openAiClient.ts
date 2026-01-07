@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import logger from "./logger";
+import { logLlmRequest, logLlmResponse, shouldLogLlmIo } from "./llmLogging";
 
 /**
  * OpenAI client singleton.
@@ -24,6 +25,8 @@ export type ChatMessage = {
 };
 
 export type ChatOptions = {
+  /** Correlation tag to identify this LLM call in logs (e.g. "assistantReply"). */
+  tag?: string;
   /** e.g. "gpt-4o-mini", "gpt-4.1-mini" */
   model?: string;
   temperature?: number;
@@ -116,6 +119,22 @@ export async function chat(req: ChatRequest): Promise<ChatResponse> {
   const model = req.model ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
   const messages = normalizeMessages(req);
 
+  // Optional centralized LLM I/O logging.
+  // Existing call-sites already call logLlmInput/logLlmOutput in many cases;
+  // this ensures *all* calls are logged when LOG_LLM_IO is enabled.
+  const tag = (req as any).tag as string | undefined;
+  if (shouldLogLlmIo) {
+    logLlmRequest({
+      tag: tag ?? "openAiClient.chat",
+      provider: "openai",
+      model,
+      temperature: req.temperature,
+      system: (req as any).system,
+      prompt: (req as any).prompt,
+      messages,
+    });
+  }
+
   try {
     const response = await openai.chat.completions.create({
       model,
@@ -127,6 +146,18 @@ export async function chat(req: ChatRequest): Promise<ChatResponse> {
     });
 
     const text = response.choices?.[0]?.message?.content ?? "";
+    const finishReason = response.choices?.[0]?.finish_reason ?? undefined;
+    const usage = (response as any).usage;
+
+    if (shouldLogLlmIo) {
+      logLlmResponse({
+        tag: tag ?? "openAiClient.chat",
+        provider: "openai",
+        text,
+        usage,
+        finishReason,
+      });
+    }
 
     if (req.includeRawResponse) {
       return { text, rawResponse: response };

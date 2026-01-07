@@ -1,7 +1,6 @@
 import { chat, type ChatMessage } from "../../utils/openAiClient";
 import logger from "../../utils/logger";
 import { parseJsonFromLLMText } from "../llm/llmJson";
-import { logLlmInput, logLlmOutput } from "../llm/llmLogging";
 
 export async function summarizeConversationMemory(args: {
   existingSummary: string | null;
@@ -48,15 +47,8 @@ Activity: ${args.activityName}`;
   mergedMessages.push(...args.messages);
 
   try {
-    logLlmInput({
-      tag: "summarizeConversationMemory",
-      model,
-      temperature: 0,
-      system,
-      messages: mergedMessages,
-    });
-
     const { text } = await chat({
+      tag: "summarizeConversationMemory",
       system,
       messages: mergedMessages,
       model,
@@ -64,7 +56,6 @@ Activity: ${args.activityName}`;
     });
 
     const raw = (text ?? "").trim();
-    logLlmOutput({ tag: "summarizeConversationMemory", text: raw });
 
     const parsed = parseJsonFromLLMText(raw);
     const summary = typeof parsed?.summary === "string" ? parsed.summary.trim() : "";

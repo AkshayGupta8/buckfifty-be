@@ -13,6 +13,7 @@ import eventRouter from "./routes/event";
 import eventMemberRouter from "./routes/eventMember";
 import timeSlotRouter from "./routes/timeSlot";
 import conversationRouter from "./routes/conversation";
+import twilioRouter from "./routes/twilio";
 
 const app = express();
 const prisma = new PrismaClient();
@@ -74,6 +75,7 @@ app.use("/events", eventRouter);
 app.use("/eventMembers", eventMemberRouter);
 app.use("/timeSlots", timeSlotRouter);
 app.use("/conversations", conversationRouter);
+app.use("/twilio", twilioRouter);
 
 app.get("/", (req: express.Request, res: express.Response) => {
   res.status(200).sendFile(path.join(process.cwd(), "public", "index.html"));

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { sendMms, sendSms } from "../utils/twilioClient";
+import logger from "../utils/logger";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -99,7 +100,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    console.error("Failed to delete user:", error);
+    logger.error("user.delete.failed", { error });
     res.status(500).json({ error: "Failed to delete user" });
   }
 });
@@ -139,7 +140,7 @@ router.post("/:userId/send-code", async (req: Request, res: Response) => {
 
     res.json({ message: "Authentication code sent" });
   } catch (error) {
-    console.error("Error in send-code endpoint:", error);
+    logger.error("user.send_code.failed", { error });
     res.status(500).json({ error: "Failed to send authentication code" });
   }
 });
@@ -176,7 +177,7 @@ router.post("/:userId/verify-code", async (req: Request, res: Response) => {
 
     res.json({ authenticated: isAuthenticated });
   } catch (error) {
-    console.error("Error in verify-code endpoint:", error);
+    logger.error("user.verify_code.failed", { error });
     res.status(500).json({ error: "Failed to verify authentication code" });
   }
 });
@@ -219,7 +220,7 @@ router.post(
 
       res.json({ message: "Contact Card sent", messageSid, mediaUrl });
     } catch (error) {
-      console.error("Error in send-contact-card endpoint:", error);
+      logger.error("user.share_contact_card.failed", { error });
       res.status(500).json({ error: "Failed to send contact card" });
     }
   }

@@ -3,7 +3,6 @@ import type { ChatMessage } from "../../utils/openAiClient";
 import { chat } from "../../utils/openAiClient";
 import { adjustDateTimeToClosestFuture } from "../../utils/timeUtils";
 import { parseJsonFromLLMText } from "../llm/llmJson";
-import { logLlmInput, logLlmOutput } from "../llm/llmLogging";
 
 function containsExplicitPastTimePhrase(s: string): boolean {
   const t = s.toLowerCase();
@@ -80,15 +79,8 @@ Rules:
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
   try {
-    logLlmInput({
-      tag: "extractAndNormalizeEventTimesFromConversation",
-      model,
-      temperature: 0,
-      system,
-      messages: args.messages,
-    });
-
     const { text } = await chat({
+      tag: "extractAndNormalizeEventTimesFromConversation",
       system,
       messages: args.messages,
       model,
@@ -96,7 +88,6 @@ Rules:
     });
 
     const raw = (text ?? "").trim();
-    logLlmOutput({ tag: "extractAndNormalizeEventTimesFromConversation", text: raw });
 
     const parsed = parseJsonFromLLMText(raw);
 

@@ -1,7 +1,14 @@
-import logger from "../../utils/logger";
-import type { ChatMessage } from "../../utils/openAiClient";
+// Backwards-compatible re-export layer.
+// Existing conversationTwilio analyzers import from this path.
+// The implementation lives in src/utils/llmLogging.ts to avoid circular deps.
+import {
+  logLlmRequest,
+  logLlmResponse,
+  shouldLogLlmIo,
+  type LlmChatMessage,
+} from "../../utils/llmLogging";
 
-const shouldLogLlmIo = process.env.LOG_LLM_IO === "1" || process.env.LOG_LLM_IO === "true";
+export { shouldLogLlmIo };
 
 export function logLlmInput(args: {
   tag: string;
@@ -9,26 +16,30 @@ export function logLlmInput(args: {
   temperature?: number;
   system?: string;
   prompt?: string;
-  messages?: ChatMessage[];
+  messages?: LlmChatMessage[];
 }): void {
-  if (!shouldLogLlmIo) return;
-
-  logger.info(
-    `[LLM:input:${args.tag}] ${JSON.stringify(
-      {
-        model: args.model,
-        temperature: args.temperature,
-        system: args.system,
-        prompt: args.prompt,
-        messages: args.messages,
-      },
-      null,
-      2
-    )}`
-  );
+  return logLlmRequest({
+    tag: args.tag,
+    provider: "openai",
+    model: args.model,
+    temperature: args.temperature,
+    system: args.system,
+    prompt: args.prompt,
+    messages: args.messages,
+  });
 }
 
-export function logLlmOutput(args: { tag: string; text: string }): void {
-  if (!shouldLogLlmIo) return;
-  logger.info(`[LLM:output:${args.tag}] ${args.text}`);
+export function logLlmOutput(args: {
+  tag: string;
+  text: string;
+  usage?: unknown;
+  finishReason?: string;
+}): void {
+  return logLlmResponse({
+    tag: args.tag,
+    provider: "openai",
+    text: args.text,
+    usage: args.usage,
+    finishReason: args.finishReason,
+  });
 }

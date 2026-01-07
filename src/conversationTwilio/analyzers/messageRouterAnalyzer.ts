@@ -1,7 +1,6 @@
 import { chat, type ChatMessage } from "../../utils/openAiClient";
 import logger from "../../utils/logger";
 import { parseJsonFromLLMText } from "../llm/llmJson";
-import { logLlmInput, logLlmOutput } from "../llm/llmLogging";
 
 export type MessageRoute = "scheduling" | "coordination";
 
@@ -42,15 +41,8 @@ export async function analyzeMessageRoute(args: {
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
   try {
-    logLlmInput({
-      tag: "analyzeMessageRoute",
-      model,
-      temperature: 0.0,
-      system: args.systemPrompt,
-      messages: args.messages,
-    });
-
     const { text } = await chat({
+      tag: "analyzeMessageRoute",
       system: args.systemPrompt,
       messages: args.messages,
       model,
@@ -58,7 +50,6 @@ export async function analyzeMessageRoute(args: {
     });
 
     const raw = (text ?? "").trim();
-    logLlmOutput({ tag: "analyzeMessageRoute", text: raw });
 
     const parsed = parseJsonFromLLMText(raw);
     const routeRaw = typeof parsed.route === "string" ? parsed.route : "scheduling";

@@ -1,4 +1,5 @@
 import { Twilio } from "twilio";
+import logger from "./logger";
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID || "";
 const authToken = process.env.TWILIO_AUTH_TOKEN || "";
@@ -30,10 +31,11 @@ export async function sendSms(to: string, body: string): Promise<string> {
       from: fromNumber,
       to,
     });
-    console.log(`Message sent successfully. SID: ${message.sid}`);
+    // Use logger so message sends are correlated with requestId/conversationId.
+    logger.info("twilio.sms.sent", { messageSid: message.sid });
     return message.sid;
   } catch (error) {
-    console.error("Failed to send message via Twilio:", error);
+    logger.error("twilio.sms.failed", { error });
     throw error;
   }
 }
@@ -51,10 +53,10 @@ export async function sendMms(
       mediaUrl: Array.isArray(mediaUrl) ? mediaUrl : [mediaUrl],
     });
 
-    console.log(`MMS sent successfully. SID: ${message.sid}`);
+    logger.info("twilio.mms.sent", { messageSid: message.sid });
     return message.sid;
   } catch (error) {
-    console.error("Failed to send MMS via Twilio:", error);
+    logger.error("twilio.mms.failed", { error });
     throw error;
   }
 }

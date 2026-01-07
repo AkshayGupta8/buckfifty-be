@@ -1,7 +1,6 @@
 import { chat, type ChatMessage } from "../../utils/openAiClient";
 import logger from "../../utils/logger";
 import { isNonEmptyString, parseJsonFromLLMText } from "../llm/llmJson";
-import { logLlmInput, logLlmOutput } from "../llm/llmLogging";
 
 export function buildInviteMessageAnalyzerSystemPrompt(): string {
   return `You are an assistant that extracts an "invite note" (aka flair) to be shared with invited members.
@@ -34,15 +33,8 @@ export async function analyzeConversationInviteMessage(
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
   try {
-    logLlmInput({
-      tag: "analyzeConversationInviteMessage",
-      model,
-      temperature: 0.0,
-      system: systemPrompt,
-      messages,
-    });
-
     const { text } = await chat({
+      tag: "analyzeConversationInviteMessage",
       system: systemPrompt,
       messages,
       model,
@@ -50,7 +42,6 @@ export async function analyzeConversationInviteMessage(
     });
 
     const raw = (text ?? "").trim();
-    logLlmOutput({ tag: "analyzeConversationInviteMessage", text: raw });
 
     const parsed = parseJsonFromLLMText(raw);
 

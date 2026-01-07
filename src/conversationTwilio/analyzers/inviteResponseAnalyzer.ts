@@ -1,7 +1,6 @@
 import { chat, type ChatMessage } from "../../utils/openAiClient";
 import logger from "../../utils/logger";
 import { parseJsonFromLLMText } from "../llm/llmJson";
-import { logLlmInput, logLlmOutput } from "../llm/llmLogging";
 
 export type InviteResponseDecision = "accepted" | "declined" | "unknown";
 
@@ -30,15 +29,8 @@ export async function analyzeInviteResponse(args: {
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
   try {
-    logLlmInput({
-      tag: "analyzeInviteResponse",
-      model,
-      temperature: 0.0,
-      system: args.systemPrompt,
-      messages: args.messages,
-    });
-
     const { text } = await chat({
+      tag: "analyzeInviteResponse",
       system: args.systemPrompt,
       messages: args.messages,
       model,
@@ -46,7 +38,6 @@ export async function analyzeInviteResponse(args: {
     });
 
     const raw = (text ?? "").trim();
-    logLlmOutput({ tag: "analyzeInviteResponse", text: raw });
 
     const parsed = parseJsonFromLLMText(raw);
     const decisionRaw = typeof parsed.decision === "string" ? parsed.decision : "unknown";

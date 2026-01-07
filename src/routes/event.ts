@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
+import logger from "../utils/logger";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -10,7 +11,7 @@ router.post("/", async (req: Request, res: Response) => {
     const event = await prisma.event.create({ data: req.body });
     res.status(201).json(event);
   } catch (error: any) {
-    console.error("Error creating event:", error);
+    logger.error("event.create.failed", { error });
     res
       .status(500)
       .json({ error: "Failed to create event", details: error.message || error.toString() });

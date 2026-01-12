@@ -172,7 +172,7 @@ router.get("/:phoneDigits", (req: Request, res: Response) => {
     .type("html")
     .send(
       renderPage(
-        `Twilio ${pretty}`,
+        `${label}`,
         `<div class="row" style="justify-content: space-between; max-width: 900px;">
          <h1 style="margin: 0;">Twilio: ${escapeHtml(pretty)} - ${escapeHtml(
           label

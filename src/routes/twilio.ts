@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import {
   TWILIO_CONSOLE_NUMBERS,
   consoleDigitsToE164,
+  getDigitsLabel,
   isAllowedConsoleNumberDigits,
 } from "../config/twilioConsole";
 import { normalizeUsPhoneToE164 } from "../utils/phoneNumber";
@@ -118,9 +119,11 @@ function renderPage(title: string, bodyHtml: string): string {
 
 // GET /twilio
 router.get("/", (req: Request, res: Response) => {
-  const links = TWILIO_CONSOLE_NUMBERS.map(n => {
+  const links = TWILIO_CONSOLE_NUMBERS.map((n) => {
     const label = n.label ?? formatUs10DigitsAsE164Pretty(n.digits);
-    return `<li><a href="/twilio/${encodeURIComponent(n.digits)}">${escapeHtml(label)}</a></li>`;
+    return `<li><a href="/twilio/${encodeURIComponent(n.digits)}">${escapeHtml(
+      n.digits
+    )} - ${escapeHtml(label)}</a></li>`;
   }).join("\n");
 
   res
@@ -132,7 +135,6 @@ router.get("/", (req: Request, res: Response) => {
         `<h1>Twilio</h1>
          <p class="muted">Pick a Twilio number:</p>
          <ul>${links}</ul>
-         <p class="muted">To add/remove numbers, edit <code>src/config/twilioConsole.ts</code>.</p>
          <p><a href="/">← back</a></p>`
       )
     );
@@ -142,24 +144,39 @@ router.get("/", (req: Request, res: Response) => {
 router.get("/:phoneDigits", (req: Request, res: Response) => {
   const { phoneDigits } = req.params;
   if (!/^\d{10}$/.test(phoneDigits)) {
-    return res.status(400).type("html").send(renderPage("Bad Request", "<p>Invalid phone number</p>"));
+    return res
+      .status(400)
+      .type("html")
+      .send(renderPage("Bad Request", "<p>Invalid phone number</p>"));
   }
   if (!isAllowedConsoleNumberDigits(phoneDigits)) {
     return res
       .status(404)
       .type("html")
-      .send(renderPage("Not Found", `<p>Unknown number: ${escapeHtml(phoneDigits)}</p>`));
+      .send(
+        renderPage(
+          "Not Found",
+          `<p>Unknown number: ${escapeHtml(phoneDigits)}</p>`
+        )
+      );
   }
 
   const phoneE164 = consoleDigitsToE164(phoneDigits);
   const pretty = formatUs10DigitsAsE164Pretty(phoneDigits);
-  const defaultToDigits = phoneDigits === "5074282550" ? "7209642185" : "5074282550";
+  const label = getDigitsLabel(phoneDigits);
+  const defaultToDigits =
+    phoneDigits === "5074282550" ? "7209642185" : "5074282550";
 
-  res.status(200).type("html").send(
-    renderPage(
-      `Twilio ${pretty}`,
-      `<div class="row" style="justify-content: space-between; max-width: 900px;">
-         <h1 style="margin: 0;">Twilio: ${escapeHtml(pretty)}</h1>
+  res
+    .status(200)
+    .type("html")
+    .send(
+      renderPage(
+        `Twilio ${pretty}`,
+        `<div class="row" style="justify-content: space-between; max-width: 900px;">
+         <h1 style="margin: 0;">Twilio: ${escapeHtml(pretty)} - ${escapeHtml(
+          label
+        )}</h1>
          <div class="row">
            <span class="muted">${escapeHtml(phoneE164)}</span>
            <a href="/twilio">all numbers</a>
@@ -345,34 +362,43 @@ router.get("/:phoneDigits", (req: Request, res: Response) => {
          refresh();
          updatePolling();
        </script>`
-    )
-  );
+      )
+    );
 });
 
 // GET /twilio/:phoneDigits/api/messages
-router.get("/:phoneDigits/api/messages", async (req: Request, res: Response) => {
-  const { phoneDigits } = req.params;
-  if (!/^\d{10}$/.test(phoneDigits)) return res.status(400).json({ error: "Invalid phone number" });
-  if (!isAllowedConsoleNumberDigits(phoneDigits)) {
-    return res.status(404).json({ error: "Unknown number" });
-  }
+router.get(
+  "/:phoneDigits/api/messages",
+  async (req: Request, res: Response) => {
+    const { phoneDigits } = req.params;
+    if (!/^\d{10}$/.test(phoneDigits))
+      return res.status(400).json({ error: "Invalid phone number" });
+    if (!isAllowedConsoleNumberDigits(phoneDigits)) {
+      return res.status(404).json({ error: "Unknown number" });
+    }
 
-  const limitRaw = req.query.limit ? Number(req.query.limit) : 50;
-  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+    const limitRaw = req.query.limit ? Number(req.query.limit) : 50;
+    const limit = Number.isFinite(limitRaw)
+      ? Math.max(1, Math.min(200, limitRaw))
+      : 50;
 
-  try {
-    const phoneE164 = consoleDigitsToE164(phoneDigits);
-    const messages = await listMessagesForNumber(phoneE164, limit);
-    res.json({ phoneDigits, phoneE164, messages });
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message ?? "Failed to list messages" });
+    try {
+      const phoneE164 = consoleDigitsToE164(phoneDigits);
+      const messages = await listMessagesForNumber(phoneE164, limit);
+      res.json({ phoneDigits, phoneE164, messages });
+    } catch (error: any) {
+      res
+        .status(500)
+        .json({ error: error?.message ?? "Failed to list messages" });
+    }
   }
-});
+);
 
 // POST /twilio/:phoneDigits/api/send
 router.post("/:phoneDigits/api/send", async (req: Request, res: Response) => {
   const { phoneDigits } = req.params;
-  if (!/^\d{10}$/.test(phoneDigits)) return res.status(400).json({ error: "Invalid phone number" });
+  if (!/^\d{10}$/.test(phoneDigits))
+    return res.status(400).json({ error: "Invalid phone number" });
   if (!isAllowedConsoleNumberDigits(phoneDigits)) {
     return res.status(404).json({ error: "Unknown number" });
   }

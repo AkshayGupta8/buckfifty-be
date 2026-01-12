@@ -13,13 +13,14 @@ export type TwilioConsoleNumber = {
   /** Digits-only, 10-digit US number (no country code). */
   digits: string;
   /** Human friendly label shown in the UI (optional). */
-  label?: string;
+  label: string;
 };
 
 export const TWILIO_CONSOLE_NUMBERS: TwilioConsoleNumber[] = [
-  { digits: "8446042431" },
-  { digits: "4632170238" },
-  { digits: "7755216885" },
+  { digits: "8446042431", label: "Larry Buck" },
+  { digits: "4632170238", label: "Curly Buck" },
+  { digits: "7755216885", label: "Moe Buck" },
+  { digits: "5074282550", label: "Buck Fifty AI Assistant" },
 ];
 
 export function consoleDigitsToE164(digits: string): string {
@@ -29,4 +30,12 @@ export function consoleDigitsToE164(digits: string): string {
 
 export function isAllowedConsoleNumberDigits(digits: string): boolean {
   return TWILIO_CONSOLE_NUMBERS.some((n) => n.digits === digits);
+}
+
+export function getDigitsLabel(digits: string): string {
+  const entry = TWILIO_CONSOLE_NUMBERS.find((n) => n.digits === digits);
+  if (!entry) {
+    throw new Error(`Unknown console number: ${digits}`);
+  }
+  return entry.label;
 }

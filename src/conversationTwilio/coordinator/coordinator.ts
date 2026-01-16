@@ -1,9 +1,15 @@
-import { Prisma, PrismaClient, type EventInvitePolicy, type EventMemberStatus } from "@prisma/client";
+import {
+  Prisma,
+  PrismaClient,
+  type EventInvitePolicy,
+  type EventMemberStatus,
+} from "@prisma/client";
 import logger from "../../utils/logger";
 import { sendSms } from "../../utils/twilioClient";
 import { fullNameForMember } from "../domain/homies";
 import {
   buildAmbiguousInviteReplySms,
+  buildMemberInviteAcknowledgementSms,
   buildMemberInviteSms,
   buildUserNotifiedOfMemberResponseSms,
 } from "../domain/inviteFormatting";
@@ -118,7 +124,9 @@ async function persistInboundToConversation(args: {
       Array.isArray(err.meta?.target) &&
       err.meta.target.includes("twilio_sid")
     ) {
-      logger.info(`Duplicate inbound message persisted; ignoring. MessageSid=${args.messageSid}`);
+      logger.info(
+        `Duplicate inbound message persisted; ignoring. MessageSid=${args.messageSid}`
+      );
       return;
     }
     throw err;
@@ -146,7 +154,8 @@ async function inviteMembers(args: {
 
   if (!event) throw new Error(`Event not found eventId=${args.eventId}`);
   const timeSlot = event.timeSlots[0];
-  if (!timeSlot) throw new Error(`Event has no timeSlot eventId=${args.eventId}`);
+  if (!timeSlot)
+    throw new Error(`Event has no timeSlot eventId=${args.eventId}`);
 
   const members = await prisma.member.findMany({
     where: { member_id: { in: args.memberIds } },
@@ -156,7 +165,9 @@ async function inviteMembers(args: {
 
   for (const m of members) {
     if (!m.phone_number) {
-      logger.info("Skipping invite because member has no phone", { memberId: m.member_id });
+      logger.info("Skipping invite because member has no phone", {
+        memberId: m.member_id,
+      });
       continue;
     }
 
@@ -174,7 +185,10 @@ async function inviteMembers(args: {
     const sid = await sendSms(m.phone_number, sms);
 
     // Ensure (event,member) conversation exists and store outbound.
-    const c = await upsertEventMemberConversation({ eventId: args.eventId, memberId: m.member_id });
+    const c = await upsertEventMemberConversation({
+      eventId: args.eventId,
+      memberId: m.member_id,
+    });
     await persistOutboundToConversation({
       conversationId: c.conversation_id,
       content: sms,
@@ -190,8 +204,14 @@ async function inviteMembers(args: {
   await prisma.$transaction(async (tx) => {
     for (const memberId of invitedWithPhone) {
       await tx.eventMember.upsert({
-        where: { event_id_member_id: { event_id: args.eventId, member_id: memberId } },
-        create: { event_id: args.eventId, member_id: memberId, status: args.markStatus },
+        where: {
+          event_id_member_id: { event_id: args.eventId, member_id: memberId },
+        },
+        create: {
+          event_id: args.eventId,
+          member_id: memberId,
+          status: args.markStatus,
+        },
         update: { status: args.markStatus },
       });
     }
@@ -234,7 +254,9 @@ async function getEventCoordinationState(eventId: string): Promise<{
 
   const maxParticipants = Math.max(0, Math.trunc(event.max_participants ?? 0));
 
-  const acceptedCount = event.eventMembers.filter((em) => em.status === "accepted").length;
+  const acceptedCount = event.eventMembers.filter(
+    (em) => em.status === "accepted"
+  ).length;
 
   const already = new Set<string>();
   for (const em of event.eventMembers) {
@@ -242,12 +264,16 @@ async function getEventCoordinationState(eventId: string): Promise<{
   }
 
   const prioritized = event.eventMembers
-    .filter((em) => em.priority_rank !== null && typeof em.priority_rank === "number")
+    .filter(
+      (em) => em.priority_rank !== null && typeof em.priority_rank === "number"
+    )
     .sort((a, b) => (a.priority_rank ?? 0) - (b.priority_rank ?? 0))
     .map((em) => em.member_id);
 
   if (!event.createdBy.phone_number) {
-    throw new Error(`User has no phone_number userId=${event.createdBy.user_id}`);
+    throw new Error(
+      `User has no phone_number userId=${event.createdBy.user_id}`
+    );
   }
 
   return {
@@ -377,12 +403,17 @@ export async function onEventCreated(eventId: string): Promise<void> {
   // For exact, maxParticipants may be null at creation time; treat as the number of listed.
   let max = state.maxParticipants;
   if (max <= 0 && state.invitePolicy === "exact") {
-    const count = await prisma.eventMember.count({ where: { event_id: eventId } });
+    const count = await prisma.eventMember.count({
+      where: { event_id: eventId },
+    });
     max = count;
   }
 
   if (max <= 0) {
-    logger.info("coordinator: event has no max_participants; skipping invites", { eventId });
+    logger.info(
+      "coordinator: event has no max_participants; skipping invites",
+      { eventId }
+    );
     return;
   }
 
@@ -422,12 +453,21 @@ export async function onMemberInboundMessage(args: {
   const memberName = fullNameForMember(member);
 
   // Upsert conversation and persist inbound.
-  const c = await upsertEventMemberConversation({ eventId: args.eventId, memberId: args.memberId });
+  const c = await upsertEventMemberConversation({
+    eventId: args.eventId,
+    memberId: args.memberId,
+  });
   await persistInboundToConversation({
     conversationId: c.conversation_id,
     content: args.inboundBody,
     messageSid: args.inboundMessageSid,
-    attributes: { participant: { type: "member", memberId: args.memberId, eventId: args.eventId } },
+    attributes: {
+      participant: {
+        type: "member",
+        memberId: args.memberId,
+        eventId: args.eventId,
+      },
+    },
   });
 
   // Run classification
@@ -454,7 +494,9 @@ export async function onMemberInboundMessage(args: {
 
   // Update EventMember status
   await prisma.eventMember.upsert({
-    where: { event_id_member_id: { event_id: args.eventId, member_id: args.memberId } },
+    where: {
+      event_id_member_id: { event_id: args.eventId, member_id: args.memberId },
+    },
     create: {
       event_id: args.eventId,
       member_id: args.memberId,
@@ -464,6 +506,25 @@ export async function onMemberInboundMessage(args: {
       status: analysis.decision,
     },
   });
+
+  // Acknowledge the homie (generic confirmation back to the invitee).
+  if (member.phone_number) {
+    const ack = buildMemberInviteAcknowledgementSms({
+      decision: analysis.decision,
+    });
+    const sid = await sendSms(member.phone_number, ack);
+    await persistOutboundToConversation({
+      conversationId: c.conversation_id,
+      content: ack,
+      twilioSid: sid,
+      attributes: {
+        coordinator: {
+          kind: "acknowledgement",
+          decision: analysis.decision,
+        },
+      },
+    });
+  }
 
   // Notify user (event creator)
   if (event.createdBy.phone_number) {
@@ -487,7 +548,11 @@ export async function onMemberInboundMessage(args: {
       content: sms,
       twilioSid: sid,
       attributes: {
-        coordinator: { kind: "member_response", eventId: args.eventId, memberId: args.memberId },
+        coordinator: {
+          kind: "member_response",
+          eventId: args.eventId,
+          memberId: args.memberId,
+        },
       },
     });
   }
@@ -532,7 +597,12 @@ export async function inferActiveInvitedEventForMember(args: {
   });
 
   const sorted = ems
-    .map((em) => ({ em, start: em.event.timeSlots[0]?.start_time?.getTime() ?? Number.POSITIVE_INFINITY }))
+    .map((em) => ({
+      em,
+      start:
+        em.event.timeSlots[0]?.start_time?.getTime() ??
+        Number.POSITIVE_INFINITY,
+    }))
     .sort((a, b) => a.start - b.start);
 
   return sorted[0]?.em.event_id ?? null;

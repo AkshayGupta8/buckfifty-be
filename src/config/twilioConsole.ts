@@ -16,12 +16,21 @@ export type TwilioConsoleNumber = {
   label: string;
 };
 
-export const TWILIO_CONSOLE_NUMBERS: TwilioConsoleNumber[] = [
+const BASE_TWILIO_CONSOLE_NUMBERS: TwilioConsoleNumber[] = [
   { digits: "8446042431", label: "Larry Buck" },
   { digits: "4632170238", label: "Curly Buck" },
   { digits: "7755216885", label: "Moe Buck" },
   { digits: "5074282550", label: "Buck Fifty AI Assistant" },
 ];
+
+const DEV_TWILIO_CONSOLE_NUMBERS: TwilioConsoleNumber[] = [
+  { digits: "7209642185", label: "[DEV] Buckfifty AI Dev" },
+  { digits: "2184133871", label: "[DEV] Phineas Buck" },
+];
+
+export const TWILIO_CONSOLE_NUMBERS: TwilioConsoleNumber[] = process.env.DEV
+  ? [...BASE_TWILIO_CONSOLE_NUMBERS, ...DEV_TWILIO_CONSOLE_NUMBERS]
+  : BASE_TWILIO_CONSOLE_NUMBERS;
 
 export function consoleDigitsToE164(digits: string): string {
   // digits are 10-digit US numbers; normalize helper can accept this.

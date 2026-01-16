@@ -1,3 +1,35 @@
+import type { EventInvitePolicy } from "@prisma/client";
+
+export type PendingEventDraft = {
+  /** Used mainly for display and for safer event creation. */
+  activityId: string;
+
+  location: string;
+  startIso: string;
+  endIso: string;
+
+  /** Max number of homies to invite (does NOT include the user). */
+  maxHomies: number;
+  invitePolicy: EventInvitePolicy;
+
+  /** Explicitly listed member ids (if any), in priority order. */
+  preferredMemberIds: string[];
+
+  /** Cached names for SMS display (avoid extra DB round-trips). */
+  preferredNamesForSms: string[];
+
+  inviteMessage?: string | null;
+
+  /** The preview SMS text we sent (so the analyzer can reference it). */
+  previewSms: string;
+  previewSentAtIso: string;
+};
+
+export type PendingEvent = {
+  status: "awaiting_confirmation";
+  draft: PendingEventDraft;
+};
+
 export type ConversationState = {
   /**
    * Compact, durable memory used across multiple event-planning “sessions”.
@@ -15,6 +47,9 @@ export type ConversationState = {
   /** Legacy keys (kept here so we can clean them up). */
   createdEventId?: string;
   draftEvent?: unknown;
+
+  /** New: when we have a complete draft but we're waiting for the user to confirm it. */
+  pendingEvent?: PendingEvent;
 };
 
 export function asConversationState(

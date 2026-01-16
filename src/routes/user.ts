@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { sendMms, sendSms } from "../utils/twilioClient";
 import logger from "../utils/logger";
+import { buildInvitePolicyExplainerLines } from "../conversationTwilio/domain/inviteBranding";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -193,6 +194,10 @@ router.post(
         where: { user_id: userId },
       });
 
+      const activity = await prisma.activity.findFirst({
+        where: { user_id: userId },
+      });
+
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
@@ -210,8 +215,20 @@ router.post(
       const vcardPath = "/public/Buckfifty%20AI%20Assistant.vcf";
       const mediaUrl = new URL(vcardPath, publicBaseUrl).toString();
 
-      const messageBody =
-        "Hello! I'm Buckfifty, your AI Assistant. I'm looking forward to connect you with your Homies!\n\nSave Buckfifty to your contacts";
+      const firstName = (user.first_name ?? "").trim();
+      const greeting = firstName.length ? `Hi ${firstName}!` : "Hi!";
+      const activityName = (activity?.name ?? "").trim();
+      const activityPhrase = activityName.length ? activityName : "your activity";
+
+      const messageBody = [
+        `${greeting} I’m Buckfifty, your AI assistant.`,
+        "",
+        `I help you coordinate ${activityPhrase} plans with your homies — lock in a time + place, send invites, and track replies.`,
+        "",
+        buildInvitePolicyExplainerLines(),
+        "",
+        "Save Buckfifty to your contacts so you can text anytime.",
+      ].join("\n");
       const messageSid = await sendMms(
         user.phone_number,
         messageBody,

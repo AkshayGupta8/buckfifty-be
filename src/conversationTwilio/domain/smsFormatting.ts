@@ -1,3 +1,6 @@
+import type { EventInvitePolicy } from "@prisma/client";
+import { brandedInvitePolicyName } from "./inviteBranding";
+
 function formatDayForSms(d: Date, timeZone: string): string {
   // Example: "Sat, Dec 21"
   const fmt = new Intl.DateTimeFormat("en-US", {
@@ -49,6 +52,9 @@ export function buildEventConfirmationSms(args: {
 
   /** Optional note/instruction to share with invited members. */
   inviteMessage?: string | null;
+
+  /** Optional, but recommended so we can show branded policy name to the user. */
+  invitePolicy?: EventInvitePolicy;
 }): string {
   const when = isSameLocalDay(args.start, args.end, args.timeZone)
     ? `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
@@ -79,6 +85,56 @@ export function buildEventConfirmationSms(args: {
   const note = (args.inviteMessage ?? "").trim();
   const noteLine = note.length ? `\nNote for homies: ${note}` : "";
 
+  const policyLine = args.invitePolicy
+    ? `\nInvite policy: ${brandedInvitePolicyName(args.invitePolicy)}`
+    : "";
+
   // Keep it short for SMS.
-  return `Locked in: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${who}${noteLine}`;
+  return `Locked in: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${who}${noteLine}${policyLine}`;
+}
+
+export function buildEventDraftPreviewSms(args: {
+  activityName: string;
+  location: string;
+  start: Date;
+  end: Date;
+  timeZone: string;
+  preferredNames: string[];
+  maxHomies: number;
+  inviteMessage?: string | null;
+  invitePolicy?: EventInvitePolicy;
+}): string {
+  const when = isSameLocalDay(args.start, args.end, args.timeZone)
+    ? `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
+        args.start,
+        args.timeZone
+      )} - ${formatTimeForSms(args.end, args.timeZone)}`
+    : `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
+        args.start,
+        args.timeZone
+      )} - ${formatDayForSms(args.end, args.timeZone)} ${formatTimeForSms(
+        args.end,
+        args.timeZone
+      )}`;
+
+  const desiredHomieCount = Math.max(0, Math.trunc(args.maxHomies));
+  const preferred = args.preferredNames.filter((n) => n.trim().length > 0);
+
+  let who: string;
+  if (preferred.length === 0) {
+    who = `Inviting ${desiredHomieCount} homies`;
+  } else if (preferred.length < desiredHomieCount) {
+    who = `Inviting: ${preferred.join(", ")} + others`;
+  } else {
+    who = `Inviting: ${preferred.join(", ")}`;
+  }
+
+  const note = (args.inviteMessage ?? "").trim();
+  const noteLine = note.length ? `\nNote for homies: ${note}` : "";
+
+  const policyLine = args.invitePolicy
+    ? `\nInvite policy: ${brandedInvitePolicyName(args.invitePolicy)}`
+    : "";
+
+  return `Draft: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${who}${noteLine}${policyLine}\n\nReply with edits, or say “looks good”.`;
 }

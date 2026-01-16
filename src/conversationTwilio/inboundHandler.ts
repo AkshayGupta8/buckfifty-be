@@ -25,12 +25,23 @@ import {
   fullNameForMember,
   resolveExplicitHomiesForEvent,
 } from "./domain/homies";
-import { buildEventConfirmationSms } from "./domain/smsFormatting";
+import {
+  brandedInvitePolicyName,
+  detectBrandedInvitePolicyHintFromText,
+} from "./domain/inviteBranding";
+import {
+  buildEventConfirmationSms,
+  buildEventDraftPreviewSms,
+} from "./domain/smsFormatting";
 import { summarizeConversationMemory } from "./memory/summarizeConversationMemory";
 import {
   onEventCreated,
   onMemberInboundMessage,
 } from "./coordinator/coordinator";
+import {
+  analyzeEventConfirmation,
+  buildEventConfirmationAnalyzerSystemPrompt,
+} from "./analyzers/eventConfirmationAnalyzer";
 import type { InboundTwilioMessageContext } from "./types";
 
 function deriveInvitePolicy(args: {
@@ -40,6 +51,21 @@ function deriveInvitePolicy(args: {
   if (args.preferredCount <= 0) return "max_only";
   if (args.preferredCount === args.maxHomies) return "exact";
   return "prioritized";
+}
+
+function detectInvitePolicyHintFromMessages(messages: ChatMessage[]):
+  | "max_only"
+  | "prioritized"
+  | "exact"
+  | null {
+  // Look at the recent user text only.
+  const recentUserText = messages
+    .filter((m) => m.role === "user")
+    .slice(-5)
+    .map((m) => m.content)
+    .join("\n");
+
+  return detectBrandedInvitePolicyHintFromText(recentUserText);
 }
 
 const prisma = new PrismaClient();
@@ -162,6 +188,169 @@ export async function onInboundTwilioMessage(
       ]
     : recentMessages;
 
+  // If we're awaiting confirmation on a complete draft, treat this inbound SMS as a
+  // confirm/edit decision.
+  if (state.pendingEvent?.status === "awaiting_confirmation") {
+    const systemPrompt = buildEventConfirmationAnalyzerSystemPrompt();
+    const decision = await analyzeEventConfirmation({
+      systemPrompt,
+      messages: [
+        { role: "assistant", content: state.pendingEvent.draft.previewSms },
+        { role: "user", content: _ctx.body },
+      ],
+    });
+
+    logger.info("eventConfirmation.decision", {
+      decision: decision.decision,
+      reason: decision.reason,
+      rawText: decision.rawText,
+    });
+
+    if (decision.decision === "confirm") {
+      const d = state.pendingEvent.draft;
+
+      const createdEvent = await prisma.$transaction(async (tx) => {
+        const event = await tx.event.create({
+          data: {
+            created_by_user_id: user.user_id,
+            activity_id: d.activityId,
+            location: d.location,
+            invite_message: d.inviteMessage,
+            max_participants: d.maxHomies,
+            invite_policy: d.invitePolicy,
+          },
+        });
+
+        await tx.timeSlot.create({
+          data: {
+            event_id: event.event_id,
+            start_time: new Date(d.startIso),
+            end_time: new Date(d.endIso),
+            status: "suggested",
+          },
+        });
+
+        if (d.preferredMemberIds.length > 0) {
+          await tx.eventMember.createMany({
+            data: d.preferredMemberIds.map((memberId, idx) => ({
+              event_id: event.event_id,
+              member_id: memberId,
+              status: "listed",
+              priority_rank: idx + 1,
+            })),
+          });
+        }
+
+        return event;
+      });
+
+      const confirmation = buildEventConfirmationSms({
+        activityName: activity.name,
+        location: d.location,
+        start: new Date(d.startIso),
+        end: new Date(d.endIso),
+        timeZone: user.timezone,
+        preferredNames: d.preferredNamesForSms,
+        maxHomies: d.maxHomies,
+        inviteMessage: d.inviteMessage,
+        invitePolicy: d.invitePolicy,
+      });
+
+      const sid = await sendSms(user.phone_number, confirmation);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: confirmation,
+          twilio_sid: sid,
+          attributes: {
+            createdEventId: createdEvent.event_id,
+          },
+        },
+      });
+
+      // Kick off coordination (invites, escalation timers, etc) in the background.
+      setImmediate(async () => {
+        try {
+          await onEventCreated(createdEvent.event_id);
+        } catch (err: any) {
+          logger.error(`coordinator:onEventCreated failed: ${err?.message ?? err}`);
+        }
+      });
+
+      // After creating an event, compact conversation into durable memory + reset planning boundary.
+      const updatedAtIso = new Date().toISOString();
+      const nextMemorySummary = await summarizeConversationMemory({
+        existingSummary: state.memorySummary ?? null,
+        userFirstName: user.first_name,
+        activityName: activity.name,
+        allowedHomies: homieNames,
+        // Use only the recent (post-boundary) messages, without the memory prelude.
+        messages: recentMessages,
+      });
+
+      const nextState = {
+        ...(state as unknown as Prisma.JsonObject),
+      } as Prisma.JsonObject;
+
+      nextState.lastCreatedEventId = createdEvent.event_id;
+      nextState.lastEventCreatedAt = updatedAtIso;
+      if (nextMemorySummary) {
+        nextState.memorySummary = nextMemorySummary;
+        nextState.memorySummaryUpdatedAt = updatedAtIso;
+      }
+
+      delete (nextState as any).pendingEvent;
+      delete (nextState as any).createdEventId;
+      delete (nextState as any).draftEvent;
+
+      await prisma.conversation.update({
+        where: { conversation_id: _ctx.conversationId },
+        data: { state: nextState as unknown as Prisma.InputJsonValue },
+      });
+
+      return;
+    }
+
+    if (decision.decision === "edit") {
+      // Clear pending draft and let this same inbound message flow through the normal extraction logic.
+      const nextState = {
+        ...(state as unknown as Prisma.JsonObject),
+      } as Prisma.JsonObject;
+      delete (nextState as any).pendingEvent;
+      await prisma.conversation.update({
+        where: { conversation_id: _ctx.conversationId },
+        data: { state: nextState as unknown as Prisma.InputJsonValue },
+      });
+      // continue
+    } else {
+      const ask = "Should I lock this in, or what should I change?";
+      const sid = await sendSms(user.phone_number, ask);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: ask,
+          twilio_sid: sid,
+          attributes: {
+            needs: "event_confirmation",
+          },
+        },
+      });
+      return;
+    }
+  }
+
+  // If the user explicitly referenced a branded invite policy, use it to shape
+  // follow-up questions and conflict checks.
+  const policyHint = detectInvitePolicyHintFromMessages(messages);
+
+  // Use only USER messages for analyzers so assistant recap/preview text doesn't get
+  // mistakenly treated as user-provided facts.
+  const userOnlyMessages = messages.filter((m) => m.role === "user");
+
   const locationAnalyzerSystemPrompt = buildLocationAnalyzerSystemPrompt();
   const homiesAnalyzerSystemPrompt = buildHomiesAnalyzerSystemPrompt({
     homiesList,
@@ -172,10 +361,10 @@ export async function onInboundTwilioMessage(
   logger.debug?.("Conversation messages", { count: messages.length });
 
   const analysisResults = await Promise.allSettled([
-    analyzeConversationLocation(messages, locationAnalyzerSystemPrompt),
-    analyzeConversationHomies(messages, homiesAnalyzerSystemPrompt, homieNames),
+    analyzeConversationLocation(userOnlyMessages, locationAnalyzerSystemPrompt),
+    analyzeConversationHomies(userOnlyMessages, homiesAnalyzerSystemPrompt, homieNames),
     analyzeConversationInviteMessage(
-      messages,
+      userOnlyMessages,
       inviteMessageAnalyzerSystemPrompt
     ),
   ]);
@@ -236,6 +425,26 @@ export async function onInboundTwilioMessage(
     );
 
     if (maxHomies === null) {
+      // If user asked for Handpicked Invite but didn't list names, ask for names (not a number).
+      if (policyHint === "exact") {
+        const ask = "Handpicked Invite — who should I invite? Reply with the homies’ names.";
+        const sid = await sendSms(user.phone_number, ask);
+        await prisma.conversationMessage.create({
+          data: {
+            conversation_id: _ctx.conversationId,
+            role: "assistant",
+            direction: "outbound",
+            content: ask,
+            twilio_sid: sid,
+            attributes: {
+              needs: "homie_names",
+              policyHint,
+            },
+          },
+        });
+        return;
+      }
+
       const ask = "How many homies should I invite?";
       const sid = await sendSms(user.phone_number, ask);
       await prisma.conversationMessage.create({
@@ -247,6 +456,7 @@ export async function onInboundTwilioMessage(
           twilio_sid: sid,
           attributes: {
             needs: "max_homies",
+            policyHint,
           },
         },
       });
@@ -297,6 +507,29 @@ export async function onInboundTwilioMessage(
           attributes: {
             preferredNames,
             maxHomies,
+            policyHint,
+          },
+        },
+      });
+      return;
+    }
+
+    // If user explicitly said "Priority Invite" but didn't include a total capacity,
+    // we want to ask for the total number to invite.
+    if (policyHint === "prioritized" && homiesAnalysis.maxHomies === null && preferredNames.length > 0) {
+      const ask = `Priority Invite — what’s the total number of homies I should invite? (Including ${preferredNames.length} you named)`;
+      const sid = await sendSms(user.phone_number, ask);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: ask,
+          twilio_sid: sid,
+          attributes: {
+            needs: "max_homies",
+            policyHint,
+            preferredNames,
           },
         },
       });
@@ -307,7 +540,7 @@ export async function onInboundTwilioMessage(
       {
         userTimezone: user.timezone,
         location: locationAnalysis.eventLocation!,
-        messages,
+        messages: userOnlyMessages,
       }
     );
 
@@ -364,6 +597,32 @@ export async function onInboundTwilioMessage(
       maxHomies,
     });
 
+    // If user explicitly stated a branded policy and it conflicts with what we inferred from
+    // the count/list rules, ask for confirmation.
+    if (policyHint && policyHint !== invitePolicy) {
+      const ask = `Quick check — do you want ${brandedInvitePolicyName(
+        policyHint
+      )}, or ${brandedInvitePolicyName(invitePolicy)}?`;
+      const sid = await sendSms(user.phone_number, ask);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: ask,
+          twilio_sid: sid,
+          attributes: {
+            needs: "invite_policy_confirmation",
+            policyHint,
+            inferredPolicy: invitePolicy,
+            maxHomies,
+            preferredNames: preferredNamesForSms,
+          },
+        },
+      });
+      return;
+    }
+
     // Defensive: exact-list must match capacity.
     if (invitePolicy === "exact" && preferredMembers.length !== maxHomies) {
       const ask = `Just to confirm — do you want to invite exactly ${preferredMembers.length} homies, or invite ${maxHomies}?`;
@@ -384,45 +643,7 @@ export async function onInboundTwilioMessage(
       return;
     }
 
-    const createdEvent = await prisma.$transaction(async (tx) => {
-      const event = await tx.event.create({
-        data: {
-          created_by_user_id: user.user_id,
-          activity_id: activity.activity_id,
-          location: locationAnalysis.eventLocation!,
-          invite_message: inviteMessageAnalysis.inviteMessage,
-          max_participants: maxHomies,
-          invite_policy: invitePolicy,
-        },
-      });
-
-      await tx.timeSlot.create({
-        data: {
-          event_id: event.event_id,
-          start_time: normalizedTimes.start,
-          end_time: normalizedTimes.end,
-          status: "suggested",
-        },
-      });
-
-      // Create EventMembers ONLY for explicitly specified homies.
-      // For "any N" and "X + others" flows, we intentionally do NOT create
-      // rows for the unspecified homies.
-      if (preferredMembers.length > 0) {
-        await tx.eventMember.createMany({
-          data: preferredMembers.map((m, idx) => ({
-            event_id: event.event_id,
-            member_id: m.member_id,
-            status: "listed",
-            priority_rank: idx + 1,
-          })),
-        });
-      }
-
-      return event;
-    });
-
-    const confirmation = buildEventConfirmationSms({
+    const preview = buildEventDraftPreviewSms({
       activityName: activity.name,
       location: locationAnalysis.eventLocation!,
       start: normalizedTimes.start,
@@ -431,64 +652,45 @@ export async function onInboundTwilioMessage(
       preferredNames: preferredNamesForSms,
       maxHomies,
       inviteMessage: inviteMessageAnalysis.inviteMessage,
+      invitePolicy,
     });
 
-    const sid = await sendSms(user.phone_number, confirmation);
+    const sid = await sendSms(user.phone_number, preview);
 
     await prisma.conversationMessage.create({
       data: {
         conversation_id: _ctx.conversationId,
         role: "assistant",
         direction: "outbound",
-        content: confirmation,
+        content: preview,
         twilio_sid: sid,
         attributes: {
-          createdEventId: createdEvent.event_id,
+          needs: "event_confirmation",
         },
       },
     });
 
-    // Kick off coordination (invites, escalation timers, etc) in the background.
-    setImmediate(async () => {
-      try {
-        await onEventCreated(createdEvent.event_id);
-      } catch (err: any) {
-        logger.error(
-          `coordinator:onEventCreated failed: ${err?.message ?? err}`
-        );
-      }
-    });
-
-    // After creating an event, compact conversation into durable memory + reset planning boundary.
     const updatedAtIso = new Date().toISOString();
-
-    // NOTE: use only the recent (post-boundary) messages, without the memory prelude.
-    const nextMemorySummary = await summarizeConversationMemory({
-      existingSummary: state.memorySummary ?? null,
-      userFirstName: user.first_name,
-      activityName: activity.name,
-      allowedHomies: homieNames,
-      messages: recentMessages,
-    });
-
-    const baseState = asConversationState(conversation.state);
     const nextState = {
-      ...(baseState as unknown as Prisma.JsonObject),
+      ...(state as unknown as Prisma.JsonObject),
     } as Prisma.JsonObject;
 
-    // Planning/session bookkeeping
-    nextState.lastCreatedEventId = createdEvent.event_id;
-    nextState.lastEventCreatedAt = updatedAtIso;
-
-    // Durable memory
-    if (nextMemorySummary) {
-      nextState.memorySummary = nextMemorySummary;
-      nextState.memorySummaryUpdatedAt = updatedAtIso;
-    }
-
-    // Remove legacy state that blocks multi-event planning.
-    delete (nextState as any).createdEventId;
-    delete (nextState as any).draftEvent;
+    nextState.pendingEvent = {
+      status: "awaiting_confirmation",
+      draft: {
+        activityId: activity.activity_id,
+        location: locationAnalysis.eventLocation!,
+        startIso: normalizedTimes.startIso,
+        endIso: normalizedTimes.endIso,
+        maxHomies,
+        invitePolicy,
+        preferredMemberIds: preferredMembers.map((m) => m.member_id),
+        preferredNamesForSms,
+        inviteMessage: inviteMessageAnalysis.inviteMessage,
+        previewSms: preview,
+        previewSentAtIso: updatedAtIso,
+      },
+    };
 
     await prisma.conversation.update({
       where: { conversation_id: _ctx.conversationId },
@@ -523,6 +725,18 @@ Homies rules:
   - A maximum number of homies to invite
 - If no homie list is provided, you MUST ask for the maximum number
 - Do NOT invent, suggest, or accept homies outside of the provided list
+
+Invite policy branding (the user may reference these explicitly):
+- Open Invite: user wants "any N" homies (no specific names required)
+- Priority Invite: user names must-invite homies, then you fill remaining invite slots up to N
+- Handpicked Invite: only invite the exact homies the user lists
+
+If the user references one of these policies but leaves out required details, ask the right follow-up:
+- Handpicked Invite but no names => ask them to list names.
+- Open Invite but no number => ask how many homies.
+- Priority Invite but missing total N => ask for the total number to invite.
+
+When it helps, use the branded names in your questions (Open Invite / Priority Invite / Handpicked Invite).
 
 SMS formatting rules:
 - Keep messages short (1-3 short lines when possible)

@@ -46,6 +46,17 @@ export function buildAmbiguousInviteReplySms(): string {
   return "Just to confirm — are you able to make it?";
 }
 
+export function buildMemberInviteAcknowledgementSms(args: {
+  decision: "accepted" | "declined";
+}): string {
+  // Keep it short + generic (no event details) to minimize accidental confusion.
+  if (args.decision === "accepted") {
+    return "Awesome — hope you have fun!";
+  }
+
+  return "All good — sorry you can’t make it. Maybe next time.";
+}
+
 export function buildUserNotifiedOfMemberResponseSms(args: {
   memberName: string;
   decision: "accepted" | "declined";

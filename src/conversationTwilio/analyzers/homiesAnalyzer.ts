@@ -50,6 +50,14 @@ Instructions:
 - **Additional Capacity**: User says "Invite Jake and 1 other" (names + added count) -> homies=["Jake ..."], maxHomies=2 (1 name + 1 other).
 - **Fallback**: If no homies or count specified -> homies=[], maxHomies=null.
 
+Branding (user may literally use these names):
+- **Open Invite** == Max Only (no named homies; just a number)
+  - e.g. "Open Invite 3" -> homies=[], maxHomies=3
+- **Priority Invite** == Additional Capacity (named homies + fill to a total)
+  - e.g. "Priority Invite Jake and 1 other" -> homies=["Jake ..."], maxHomies=2
+- **Handpicked Invite** == Exact List (the listed names are the invite list)
+  - e.g. "Handpicked Invite Jake and Sara" -> homies=["Jake ...", "Sara ..."], maxHomies=null
+
 Constraints:
 - Do not invent names.
 - Homies may ONLY be selected from this list (verbatim):

@@ -18,6 +18,30 @@ export type PendingEventDraft = {
   /** Cached names for SMS display (avoid extra DB round-trips). */
   preferredNamesForSms: string[];
 
+  /**
+   * Locked invite plan computed at preview-time.
+   *
+   * We persist this so that (a) the confirmation SMS can list exact names, and
+   * (b) the event-creation step cannot reshuffle and change who gets invited.
+   */
+  immediateMemberIds?: string[];
+  followUpMemberIds?: string[];
+
+  /** Cached names for the locked invite plan (SMS display). */
+  immediateNamesForSms?: string[];
+  followUpNamesForSms?: string[];
+
+  /**
+   * Sticky exclusions for this draft ("don’t invite X").
+   *
+   * These are applied to both Inviting-now and Backup lists and MUST remain excluded
+   * unless the user explicitly unbans them.
+   */
+  excludedMemberIds?: string[];
+
+  /** Cached names for excluded members (SMS display only). */
+  excludedNamesForSms?: string[];
+
   inviteMessage?: string | null;
 
   /** The preview SMS text we sent (so the analyzer can reference it). */

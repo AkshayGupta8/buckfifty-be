@@ -30,7 +30,6 @@ import {
   detectBrandedInvitePolicyHintFromText,
 } from "./domain/inviteBranding";
 import {
-  buildEventConfirmationSms,
   buildEventDraftPreviewSms,
 } from "./domain/smsFormatting";
 import { summarizeConversationMemory } from "./memory/summarizeConversationMemory";
@@ -42,7 +41,172 @@ import {
   analyzeEventConfirmation,
   buildEventConfirmationAnalyzerSystemPrompt,
 } from "./analyzers/eventConfirmationAnalyzer";
+import {
+  analyzeEventDraftEdit,
+  buildEventDraftEditAnalyzerSystemPrompt,
+} from "./analyzers/eventDraftEditAnalyzer";
+import { applyInvitePlanPatch } from "./domain/invitePlanEdits";
 import type { InboundTwilioMessageContext } from "./types";
+
+function shuffleInPlace<T>(arr: T[]): T[] {
+  // Fisher–Yates shuffle
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function uniqueById<T extends { member_id: string }>(members: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const m of members) {
+    if (!seen.has(m.member_id)) {
+      seen.add(m.member_id);
+      out.push(m);
+    }
+  }
+  return out;
+}
+
+function buildInvitePlan(args: {
+  invitePolicy: "max_only" | "prioritized" | "exact";
+  maxHomies: number;
+  allMembers: Prisma.MemberGetPayload<{}>[];
+  preferredMembers: Prisma.MemberGetPayload<{}>[];
+}): {
+  // Members to mark as `invited` immediately
+  immediate: Prisma.MemberGetPayload<{}>[];
+  // Members to mark as `listed` for follow-up (decline/timeout)
+  followUp: Prisma.MemberGetPayload<{}>[];
+} {
+  const all = uniqueById(args.allMembers);
+  const preferred = uniqueById(args.preferredMembers);
+
+  const max = Math.max(0, Math.trunc(args.maxHomies));
+
+  if (args.invitePolicy === "exact") {
+    return {
+      immediate: preferred,
+      followUp: [],
+    };
+  }
+
+  if (args.invitePolicy === "prioritized") {
+    const preferredIds = new Set(preferred.map((m) => m.member_id));
+    const remaining = all.filter((m) => !preferredIds.has(m.member_id));
+    shuffleInPlace(remaining);
+
+    const need = Math.max(0, max - preferred.length);
+    const fillers = remaining.slice(0, need);
+    const immediate = [...preferred, ...fillers];
+
+    const immediateIds = new Set(immediate.map((m) => m.member_id));
+    // Follow-up should be randomized so it reflects the order we’ll likely invite next.
+    const followUp = shuffleInPlace(
+      all.filter((m) => !immediateIds.has(m.member_id))
+    );
+
+    return { immediate, followUp };
+  }
+
+  // max_only
+  const shuffled = shuffleInPlace([...all]);
+  const immediate = shuffled.slice(0, max);
+  const followUp = shuffled.slice(max);
+  return { immediate, followUp };
+}
+
+function resolveMembersById(args: {
+  allMembers: Prisma.MemberGetPayload<{}>[];
+  ids: string[];
+}): Prisma.MemberGetPayload<{}>[] {
+  const byId = new Map(args.allMembers.map((m) => [m.member_id, m] as const));
+  return (args.ids ?? []).map((id) => byId.get(id)).filter(Boolean) as Prisma.MemberGetPayload<{}>[];
+}
+
+function buildAllowedHomiesListForPrompt(homies: Prisma.MemberGetPayload<{}>[]): string {
+  const names = homies
+    .map((h) => fullNameForMember(h))
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
+
+  return names.length ? names.map((n) => `- ${n}`).join("\n") : "(no homies yet)";
+}
+
+function buildLockedInInvitePlanSms(args: {
+  activityName: string;
+  location: string;
+  start: Date;
+  end: Date;
+  timeZone: string;
+  invitePolicy: "max_only" | "prioritized" | "exact";
+  maxHomies: number;
+  inviteMessage?: string | null;
+  immediateNames: string[];
+  followUpNames: string[];
+}): string {
+  // We intentionally override the prior confirmation text so it lists actual names.
+  // Keep it short and SMS-friendly.
+
+  const dayFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: args.timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+
+  const timeFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: args.timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  const sameDay =
+    dayFmt.format(args.start) === dayFmt.format(args.end) &&
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: args.timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(args.start) ===
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: args.timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(args.end);
+
+  const when = sameDay
+    ? `${dayFmt.format(args.start)} ${timeFmt.format(args.start)} - ${timeFmt.format(
+        args.end
+      )}`
+    : `${dayFmt.format(args.start)} ${timeFmt.format(
+        args.start
+      )} - ${dayFmt.format(args.end)} ${timeFmt.format(args.end)}`;
+
+  const note = (args.inviteMessage ?? "").trim();
+  const noteLine = note.length ? `\nNote for homies: ${note}` : "";
+
+  const immediate = args.immediateNames.filter((n) => n.trim().length > 0);
+  const followUp = args.followUpNames.filter((n) => n.trim().length > 0);
+
+  const immediateLine = `Inviting now: ${
+    immediate.length ? immediate.join(", ") : "(none)"
+  }`;
+
+  let backupLine: string;
+  if (args.invitePolicy === "exact") {
+    backupLine = "Backup invites (if needed): (none — only these homies will be invited)";
+  } else {
+    backupLine = `Backup invites (if needed): ${
+      followUp.length ? followUp.join(", ") : "(none)"
+    }`;
+  }
+
+  // Requested format: explicitly include these two lines.
+  return `Locked in: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${immediateLine}\n${backupLine}${noteLine}`;
+}
 
 function deriveInvitePolicy(args: {
   preferredCount: number;
@@ -209,6 +373,16 @@ export async function onInboundTwilioMessage(
     if (decision.decision === "confirm") {
       const d = state.pendingEvent.draft;
 
+      const preferredMembersForPlan = homies.filter((m) =>
+        d.preferredMemberIds.includes(m.member_id)
+      );
+
+      // Use locked invite plan from preview-time to prevent reshuffles.
+      const immediateIds = d.immediateMemberIds ?? [];
+      const followUpIds = d.followUpMemberIds ?? [];
+      const immediateMembers = resolveMembersById({ allMembers: homies, ids: immediateIds });
+      const followUpMembers = resolveMembersById({ allMembers: homies, ids: followUpIds });
+
       const createdEvent = await prisma.$transaction(async (tx) => {
         const event = await tx.event.create({
           data: {
@@ -230,30 +404,65 @@ export async function onInboundTwilioMessage(
           },
         });
 
-        if (d.preferredMemberIds.length > 0) {
-          await tx.eventMember.createMany({
-            data: d.preferredMemberIds.map((memberId, idx) => ({
-              event_id: event.event_id,
-              member_id: memberId,
-              status: "listed",
-              priority_rank: idx + 1,
-            })),
+        // Persist EventMember rows per policy.
+        // - Immediate invites are status=invited
+        // - Follow-up pool is status=listed
+        // - priority_rank only applies to explicitly listed preferred homies
+        const preferredRankById = new Map(
+          d.preferredMemberIds.map((id, idx) => [id, idx + 1] as const)
+        );
+
+        const rows: {
+          event_id: string;
+          member_id: string;
+          status: "listed" | "invited";
+          priority_rank?: number;
+        }[] = [];
+
+        const immediateIdSet = new Set(immediateMembers.map((m) => m.member_id));
+        const followUpIdSet = new Set(followUpMembers.map((m) => m.member_id));
+
+        // For exact, only persist preferred (immediate). For others, persist all homies.
+        const pool =
+          d.invitePolicy === "exact"
+            ? preferredMembersForPlan
+            : uniqueById(homies);
+
+        for (const m of pool) {
+          const status: "listed" | "invited" = immediateIdSet.has(m.member_id)
+            ? "invited"
+            : followUpIdSet.has(m.member_id)
+              ? "listed"
+              : "listed";
+
+          const rank = preferredRankById.get(m.member_id);
+
+          rows.push({
+            event_id: event.event_id,
+            member_id: m.member_id,
+            status,
+            ...(typeof rank === "number" ? { priority_rank: rank } : {}),
           });
+        }
+
+        if (rows.length > 0) {
+          await tx.eventMember.createMany({ data: rows });
         }
 
         return event;
       });
 
-      const confirmation = buildEventConfirmationSms({
+      const confirmation = buildLockedInInvitePlanSms({
         activityName: activity.name,
         location: d.location,
         start: new Date(d.startIso),
         end: new Date(d.endIso),
         timeZone: user.timezone,
-        preferredNames: d.preferredNamesForSms,
+        invitePolicy: d.invitePolicy,
         maxHomies: d.maxHomies,
         inviteMessage: d.inviteMessage,
-        invitePolicy: d.invitePolicy,
+        immediateNames: (d.immediateNamesForSms ?? immediateMembers.map(fullNameForMember)),
+        followUpNames: (d.followUpNamesForSms ?? followUpMembers.map(fullNameForMember)),
       });
 
       const sid = await sendSms(user.phone_number, confirmation);
@@ -314,16 +523,120 @@ export async function onInboundTwilioMessage(
     }
 
     if (decision.decision === "edit") {
-      // Clear pending draft and let this same inbound message flow through the normal extraction logic.
+      // Draft edit mode: keep pending draft and apply invite-plan edits deterministically.
+      const d = state.pendingEvent.draft;
+
+      const immediateIds = d.immediateMemberIds ?? [];
+      const followUpIds = d.followUpMemberIds ?? [];
+      const excludedIds = d.excludedMemberIds ?? [];
+
+      const immediateMembers = resolveMembersById({ allMembers: homies, ids: immediateIds });
+      const followUpMembers = resolveMembersById({ allMembers: homies, ids: followUpIds });
+      const excludedMembers = resolveMembersById({ allMembers: homies, ids: excludedIds });
+
+      const systemPrompt = buildEventDraftEditAnalyzerSystemPrompt({
+        allowedHomiesList: buildAllowedHomiesListForPrompt(homies),
+        currentInvitingNow: immediateMembers.map(fullNameForMember),
+        currentBackups: followUpMembers.map(fullNameForMember),
+        currentExcluded: excludedMembers.map(fullNameForMember),
+      });
+
+      const { patch, rawText } = await analyzeEventDraftEdit({
+        systemPrompt,
+        messages: [
+          { role: "assistant", content: d.previewSms },
+          { role: "user", content: _ctx.body },
+        ],
+      });
+
+      logger.info("eventDraftEdit.patch", { patch, rawText });
+
+      const patched = applyInvitePlanPatch({
+        maxHomies: d.maxHomies,
+        allMembers: homies,
+        plan: {
+          immediateMemberIds: immediateIds,
+          followUpMemberIds: followUpIds,
+          excludedMemberIds: excludedIds,
+        },
+        patch,
+        bumpLastImmediateOnAddWhenFull: true,
+      });
+
+      if (!patched.ok) {
+        const ask = `${patched.reason}.\nReply with a homie name from your list.`.slice(0, 300);
+        const sid = await sendSms(user.phone_number, ask);
+        await prisma.conversationMessage.create({
+          data: {
+            conversation_id: _ctx.conversationId,
+            role: "assistant",
+            direction: "outbound",
+            content: ask,
+            twilio_sid: sid,
+            attributes: {
+              needs: "event_confirmation",
+              reason: "draft_edit_failed",
+            },
+          },
+        });
+        return;
+      }
+
+      const previewWithEdits = buildEventDraftPreviewSms({
+        activityName: activity.name,
+        location: d.location,
+        start: new Date(d.startIso),
+        end: new Date(d.endIso),
+        timeZone: user.timezone,
+        preferredNames: d.preferredNamesForSms,
+        maxHomies: d.maxHomies,
+        inviteMessage: d.inviteMessage,
+        invitePolicy: d.invitePolicy,
+        immediateNames: patched.immediateNames,
+        followUpNames: patched.followUpNames,
+        excludedNames: patched.excludedNames,
+      });
+
+      const sid = await sendSms(user.phone_number, previewWithEdits);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: previewWithEdits,
+          twilio_sid: sid,
+          attributes: {
+            needs: "event_confirmation",
+          },
+        },
+      });
+
+      const updatedAtIso = new Date().toISOString();
       const nextState = {
         ...(state as unknown as Prisma.JsonObject),
       } as Prisma.JsonObject;
-      delete (nextState as any).pendingEvent;
+
+      nextState.pendingEvent = {
+        status: "awaiting_confirmation",
+        draft: {
+          ...d,
+          immediateMemberIds: patched.plan.immediateMemberIds,
+          followUpMemberIds: patched.plan.followUpMemberIds,
+          excludedMemberIds: patched.plan.excludedMemberIds,
+          immediateNamesForSms: patched.immediateNames,
+          followUpNamesForSms: patched.followUpNames,
+          excludedNamesForSms: patched.excludedNames,
+          previewSms: previewWithEdits,
+          previewSentAtIso: updatedAtIso,
+        },
+      };
+
       await prisma.conversation.update({
         where: { conversation_id: _ctx.conversationId },
         data: { state: nextState as unknown as Prisma.InputJsonValue },
       });
-      // continue
+
+      return;
     } else {
       const ask = "Should I lock this in, or what should I change?";
       const sid = await sendSms(user.phone_number, ask);
@@ -643,7 +956,15 @@ export async function onInboundTwilioMessage(
       return;
     }
 
-    const preview = buildEventDraftPreviewSms({
+    // Lock the invite plan at preview-time so names don't reshuffle at confirmation.
+    const plan = buildInvitePlan({
+      invitePolicy,
+      maxHomies,
+      allMembers: homies,
+      preferredMembers,
+    });
+
+    const previewWithPlan = buildEventDraftPreviewSms({
       activityName: activity.name,
       location: locationAnalysis.eventLocation!,
       start: normalizedTimes.start,
@@ -653,16 +974,18 @@ export async function onInboundTwilioMessage(
       maxHomies,
       inviteMessage: inviteMessageAnalysis.inviteMessage,
       invitePolicy,
+      immediateNames: plan.immediate.map(fullNameForMember),
+      followUpNames: plan.followUp.map(fullNameForMember),
     });
 
-    const sid = await sendSms(user.phone_number, preview);
+    const sid = await sendSms(user.phone_number, previewWithPlan);
 
     await prisma.conversationMessage.create({
       data: {
         conversation_id: _ctx.conversationId,
         role: "assistant",
         direction: "outbound",
-        content: preview,
+        content: previewWithPlan,
         twilio_sid: sid,
         attributes: {
           needs: "event_confirmation",
@@ -686,8 +1009,14 @@ export async function onInboundTwilioMessage(
         invitePolicy,
         preferredMemberIds: preferredMembers.map((m) => m.member_id),
         preferredNamesForSms,
+        immediateMemberIds: plan.immediate.map((m) => m.member_id),
+        followUpMemberIds: plan.followUp.map((m) => m.member_id),
+        immediateNamesForSms: plan.immediate.map(fullNameForMember),
+        followUpNamesForSms: plan.followUp.map(fullNameForMember),
+        excludedMemberIds: [],
+        excludedNamesForSms: [],
         inviteMessage: inviteMessageAnalysis.inviteMessage,
-        previewSms: preview,
+        previewSms: previewWithPlan,
         previewSentAtIso: updatedAtIso,
       },
     };

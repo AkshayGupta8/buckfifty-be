@@ -1,9 +1,23 @@
 import { Router, Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import logger from "../utils/logger";
+import {
+  ACTIVE_CAPACITY_STATUSES,
+  validateMaxParticipantsValue,
+} from "../domain/eventCapacity";
 
 const prisma = new PrismaClient();
 const router = Router();
+
+const CAPACITY_ERR_PREFIX = "CAPACITY:";
+
+function isCapacityError(err: any): boolean {
+  return typeof err?.message === "string" && err.message.startsWith(CAPACITY_ERR_PREFIX);
+}
+
+function capacityErrorMessage(err: any): string {
+  return String(err?.message ?? "").replace(CAPACITY_ERR_PREFIX, "").trim();
+}
 
 // Get full Event details by ID (activity, members, timeslots, etc.)
 // NOTE: Keep this route BEFORE `/:id` to avoid shadowing.
@@ -56,11 +70,48 @@ router.get("/:id/details", async (req: Request, res: Response) => {
 // Create Event
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const event = await prisma.event.create({ data: req.body });
-    res.status(201).json(event);
+    // Validate max_participants if present.
+    const maxCheck = validateMaxParticipantsValue((req.body ?? {}).max_participants);
+    if (!maxCheck.ok) {
+      return res.status(400).json({ error: maxCheck.reason });
+    }
+
+    // Use a transaction so if nested EventMember writes exceed capacity, we rollback.
+    const event = await prisma.$transaction(async (tx) => {
+      const created = await tx.event.create({
+        data: {
+          ...(req.body ?? {}),
+          max_participants: maxCheck.value,
+        },
+      });
+
+      const max = created.max_participants;
+      if (typeof max === "number") {
+        const activeCount = await tx.eventMember.count({
+          where: {
+            event_id: created.event_id,
+            // invited/messaged/accepted count; listed/declined do not.
+            status: { in: [...ACTIVE_CAPACITY_STATUSES] },
+          },
+        });
+
+        if (activeCount > max) {
+          throw new Error(
+            `${CAPACITY_ERR_PREFIX} Event has ${activeCount} active homies but max_participants is ${max}.`
+          );
+        }
+      }
+
+      return created;
+    });
+
+    return res.status(201).json(event);
   } catch (error: any) {
+    if (isCapacityError(error)) {
+      return res.status(400).json({ error: capacityErrorMessage(error) });
+    }
     logger.error("event.create.failed", { error });
-    res
+    return res
       .status(500)
       .json({
         error: "Failed to create event",
@@ -95,13 +146,48 @@ router.get("/:id", async (req: Request, res: Response) => {
 // Update Event by ID
 router.put("/:id", async (req: Request, res: Response) => {
   try {
-    const event = await prisma.event.update({
-      where: { event_id: req.params.id },
-      data: req.body,
+    const data: any = { ...(req.body ?? {}) };
+
+    // Only validate max_participants if the client is attempting to set it.
+    if (Object.prototype.hasOwnProperty.call(data, "max_participants")) {
+      const maxCheck = validateMaxParticipantsValue(data.max_participants);
+      if (!maxCheck.ok) {
+        return res.status(400).json({ error: maxCheck.reason });
+      }
+      data.max_participants = maxCheck.value;
+    }
+
+    const event = await prisma.$transaction(async (tx) => {
+      const updated = await tx.event.update({
+        where: { event_id: req.params.id },
+        data,
+      });
+
+      const max = updated.max_participants;
+      if (typeof max === "number") {
+        const activeCount = await tx.eventMember.count({
+          where: {
+            event_id: updated.event_id,
+            status: { in: [...ACTIVE_CAPACITY_STATUSES] },
+          },
+        });
+
+        if (activeCount > max) {
+          throw new Error(
+            `${CAPACITY_ERR_PREFIX} Event has ${activeCount} active homies but max_participants is ${max}.`
+          );
+        }
+      }
+
+      return updated;
     });
-    res.json(event);
+
+    return res.json(event);
   } catch (error) {
-    res.status(500).json({ error: "Failed to update event" });
+    if (isCapacityError(error)) {
+      return res.status(400).json({ error: capacityErrorMessage(error) });
+    }
+    return res.status(500).json({ error: "Failed to update event" });
   }
 });
 

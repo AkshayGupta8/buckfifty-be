@@ -1,0 +1,38 @@
+{
+    "pendingEvent": {
+        "draft": {
+            "endIso": "2026-01-26T14:00:00-07:00",
+            "location": "NCAR Trail",
+            "startIso": "2026-01-26T13:00:00-07:00",
+            "maxHomies": 1,
+            "activityId": "f77f77ec-0b0a-4a74-b90a-f0ac81b690f7",
+            "previewSms": "Draft: Run 🏃‍♂️\nWhen: Mon, Jan 26 1:00 PM - 2:00 PM\nWhere: NCAR Trail\nInviting now: Phineas Buck\nBackup invites (if needed): Larry Buck, Curly Buck\nExcluded: Moe Buck\nInvite policy: Open Invite\n\nReply with edits, or say “looks good”.",
+            "invitePolicy": "max_only",
+            "inviteMessage": null,
+            "previewSentAtIso": "2026-01-25T21:10:01.015Z",
+            "excludedMemberIds": [
+                "41d63b77-1c84-4db3-a752-95cb571f070d"
+            ],
+            "followUpMemberIds": [
+                "9823fc18-deb3-4248-a074-4aa7752ba345",
+                "aca5fd1d-f154-4a8e-b219-46a4d7c88b64"
+            ],
+            "immediateMemberIds": [
+                "5b0fad4c-5874-4b41-9413-ea17d0e68e31"
+            ],
+            "preferredMemberIds": [],
+            "excludedNamesForSms": [
+                "Moe Buck"
+            ],
+            "followUpNamesForSms": [
+                "Larry Buck",
+                "Curly Buck"
+            ],
+            "immediateNamesForSms": [
+                "Phineas Buck"
+            ],
+            "preferredNamesForSms": []
+        },
+        "status": "awaiting_confirmation"
+    }
+}

@@ -103,6 +103,13 @@ export function buildEventDraftPreviewSms(args: {
   maxHomies: number;
   inviteMessage?: string | null;
   invitePolicy?: EventInvitePolicy;
+
+  /** If provided, show exact locked-in plan rather than "X + others". */
+  immediateNames?: string[];
+  followUpNames?: string[];
+
+  /** Optional: show excluded homies (sticky "don't invite"). */
+  excludedNames?: string[];
 }): string {
   const when = isSameLocalDay(args.start, args.end, args.timeZone)
     ? `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
@@ -117,16 +124,36 @@ export function buildEventDraftPreviewSms(args: {
         args.timeZone
       )}`;
 
-  const desiredHomieCount = Math.max(0, Math.trunc(args.maxHomies));
   const preferred = args.preferredNames.filter((n) => n.trim().length > 0);
 
-  let who: string;
-  if (preferred.length === 0) {
-    who = `Inviting ${desiredHomieCount} homies`;
-  } else if (preferred.length < desiredHomieCount) {
-    who = `Inviting: ${preferred.join(", ")} + others`;
+  const immediate = (args.immediateNames ?? []).filter((n) => n.trim().length > 0);
+  const followUp = (args.followUpNames ?? []).filter((n) => n.trim().length > 0);
+  const excluded = (args.excludedNames ?? []).filter((n) => n.trim().length > 0);
+
+  // If we have a locked plan, show the requested two-line output.
+  // Otherwise fall back to legacy "X + others" preview.
+  let whoLines: string;
+  if (immediate.length || followUp.length) {
+    const immediateLine = `Inviting now: ${immediate.length ? immediate.join(", ") : "(none)"}`;
+
+    const backupLine =
+      args.invitePolicy === "exact"
+        ? "Backup invites (if needed): (none — only these homies will be invited)"
+        : `Backup invites (if needed): ${followUp.length ? followUp.join(", ") : "(none)"}`;
+
+    const excludedLine = excluded.length ? `\nExcluded: ${excluded.join(", ")}` : "";
+    whoLines = `${immediateLine}\n${backupLine}${excludedLine}`;
   } else {
-    who = `Inviting: ${preferred.join(", ")}`;
+    const desiredHomieCount = Math.max(0, Math.trunc(args.maxHomies));
+    let who: string;
+    if (preferred.length === 0) {
+      who = `Inviting ${desiredHomieCount} homies`;
+    } else if (preferred.length < desiredHomieCount) {
+      who = `Inviting: ${preferred.join(", ")} + others`;
+    } else {
+      who = `Inviting: ${preferred.join(", ")}`;
+    }
+    whoLines = who;
   }
 
   const note = (args.inviteMessage ?? "").trim();
@@ -136,5 +163,5 @@ export function buildEventDraftPreviewSms(args: {
     ? `\nInvite policy: ${brandedInvitePolicyName(args.invitePolicy)}`
     : "";
 
-  return `Draft: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${who}${noteLine}${policyLine}\n\nReply with edits, or say “looks good”.`;
+  return `Draft: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${whoLines}${noteLine}${policyLine}\n\nReply with edits, or say “looks good”.`;
 }

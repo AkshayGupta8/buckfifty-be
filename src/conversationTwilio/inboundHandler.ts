@@ -1,6 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import type { ChatMessage } from "../utils/openAiClient";
-import { chat } from "../utils/openAiClient";
 import logger from "../utils/logger";
 import { sendSms } from "../utils/twilioClient";
 import {
@@ -15,9 +14,10 @@ import {
   analyzeConversationInviteMessage,
   buildInviteMessageAnalyzerSystemPrompt,
 } from "./analyzers/inviteMessageAnalyzer";
-import { extractAndNormalizeEventTimesFromConversation } from "./analyzers/timeExtractor";
+import { analyzeEventTimePatch } from "./analyzers/eventTimePatchAnalyzer";
 import {
   asConversationState,
+  type ActiveEventDraft,
   parseIsoDateOrNull,
 } from "./domain/conversationState";
 import {
@@ -27,11 +27,11 @@ import {
 } from "./domain/homies";
 import {
   brandedInvitePolicyName,
-  detectBrandedInvitePolicyHintFromText,
 } from "./domain/inviteBranding";
 import {
   buildEventDraftPreviewSms,
 } from "./domain/smsFormatting";
+import { buildSchedulerHowItWorksSms } from "./domain/helpFormatting";
 import { summarizeConversationMemory } from "./memory/summarizeConversationMemory";
 import {
   onEventCreated,
@@ -45,8 +45,24 @@ import {
   analyzeEventDraftEdit,
   buildEventDraftEditAnalyzerSystemPrompt,
 } from "./analyzers/eventDraftEditAnalyzer";
+import {
+  analyzeInvitePolicyIntent,
+  buildInvitePolicyIntentAnalyzerSystemPrompt,
+} from "./analyzers/invitePolicyIntentAnalyzer";
 import { applyInvitePlanPatch } from "./domain/invitePlanEdits";
 import type { InboundTwilioMessageContext } from "./types";
+
+import { DateTime } from "luxon";
+import {
+  anchorTimeOfDayToNow,
+  anchorTimeOfDayToExplicitDayOffset,
+  anchorTimeOfDayToReferenceDay,
+  detectExplicitDayOffset,
+  parseDurationMinutes,
+  parseSimpleTimeOfDay,
+  parseTimeRangeOfDay,
+  textMentionsStartOrEnd,
+} from "./domain/smsTimeParsing";
 
 function shuffleInPlace<T>(arr: T[]): T[] {
   // Fisher–Yates shuffle
@@ -97,8 +113,11 @@ function buildInvitePlan(args: {
     const remaining = all.filter((m) => !preferredIds.has(m.member_id));
     shuffleInPlace(remaining);
 
-    const need = Math.max(0, max - preferred.length);
-    const fillers = remaining.slice(0, need);
+    // Priority Invite behavior (per product):
+    // - ALWAYS invite all preferred (priority) homies, even if that exceeds n.
+    // - ALSO randomly pick n additional homies and invite them.
+    // This means the immediate invite set may exceed n.
+    const fillers = remaining.slice(0, max);
     const immediate = [...preferred, ...fillers];
 
     const immediateIds = new Set(immediate.map((m) => m.member_id));
@@ -217,19 +236,20 @@ function deriveInvitePolicy(args: {
   return "prioritized";
 }
 
-function detectInvitePolicyHintFromMessages(messages: ChatMessage[]):
-  | "max_only"
-  | "prioritized"
-  | "exact"
-  | null {
+async function detectInvitePolicyHintFromMessages(messages: ChatMessage[]): Promise<
+  "max_only" | "prioritized" | "exact" | null
+> {
   // Look at the recent user text only.
-  const recentUserText = messages
-    .filter((m) => m.role === "user")
-    .slice(-5)
-    .map((m) => m.content)
-    .join("\n");
+  const recentUserMessages = messages.filter((m) => m.role === "user").slice(-5);
+  const systemPrompt = buildInvitePolicyIntentAnalyzerSystemPrompt();
+  const { intent } = await analyzeInvitePolicyIntent({
+    systemPrompt,
+    messages: recentUserMessages,
+  });
 
-  return detectBrandedInvitePolicyHintFromText(recentUserText);
+  // Guardrail: if low confidence, treat as no hint.
+  if (!intent.policy || intent.confidence === "low") return null;
+  return intent.policy;
 }
 
 const prisma = new PrismaClient();
@@ -278,6 +298,12 @@ export async function onInboundTwilioMessage(
     throw new Error(`User not found for userId=${_ctx.userId}`);
   }
 
+  // Ensure we have a phone number before any outbound SMS (including assistant intents).
+  // This also narrows the type for TypeScript.
+  if (!user.phone_number) {
+    throw new Error(`User has no phone_number for userId=${_ctx.userId}`);
+  }
+
   const activity = await prisma.activity.findFirst({
     where: { user_id: user.user_id },
   });
@@ -302,17 +328,117 @@ export async function onInboundTwilioMessage(
     ? homieNames.map((name) => `- ${name}`).join("\n")
     : "(no homies yet)";
 
+  // =========================
+  // Lightweight assistant intents
+  // =========================
+  // These are “info” questions that should NOT trigger the scheduling flow.
+  // Keep deterministic (no LLM) so UX is reliable.
+  const normalizeQuick = (t: string): string =>
+    (t ?? "")
+      .toLowerCase()
+      .trim()
+      // Strip punctuation so "who are you?" matches.
+      .replace(/[^a-z0-9\s]/g, "")
+      .replace(/\s+/g, " ");
+
+  const t0 = normalizeQuick(_ctx.body ?? "");
+
+  const isWhoAreMyHomies =
+    t0 === "who are my homies" ||
+    t0 === "who are my homies list" ||
+    t0 === "list my homies" ||
+    t0 === "my homies";
+
+  const isWhoAreYou =
+    t0 === "who are you" ||
+    t0 === "who r u" ||
+    t0 === "what are you" ||
+    t0 === "what is buckfifty" ||
+    t0 === "what is buck fifty";
+
+  if (isWhoAreMyHomies) {
+    const activityName = (activity.name ?? "").trim() || "your activity";
+
+    const names = homieNames.filter((n) => n.trim().length > 0);
+    const list = names.length
+      ? names.map((n) => `- ${n}`).join("\n")
+      : "(no homies yet)";
+
+    const sms = names.length
+      ? `Here are your homies:\n${list}\n\nWant me to help schedule ${activityName} with them?`
+      : `You don't have any homies added yet.\n\nWant to add one, or should we schedule ${activityName} with someone new?`;
+
+    const sid = await sendSms(user.phone_number, sms);
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: sms,
+        twilio_sid: sid,
+        attributes: { kind: "assistant_intent_homies_list" },
+      },
+    });
+
+    return;
+  }
+
+  if (isWhoAreYou) {
+    const activityName = (activity.name ?? "").trim() || "your activity";
+    const sms = `I'm the BuckFifty AI — I help you schedule ${activityName} with your homies.\n\nTell me what you want to do (e.g. \"schedule ${activityName} tomorrow at 7\") and I'll take it from there.`;
+
+    const sid = await sendSms(user.phone_number, sms);
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: sms,
+        twilio_sid: sid,
+        attributes: { kind: "assistant_intent_identity" },
+      },
+    });
+
+    return;
+  }
+
   if (!conversation) {
     throw new Error(
       `No conversation found for conversationId=${_ctx.conversationId}`
     );
   }
 
-  if (!user.phone_number) {
-    throw new Error(`User has no phone_number for userId=${_ctx.userId}`);
-  }
-
   const state = asConversationState(conversation.state);
+
+  // Command-style help. Keep this deterministic so it behaves predictably.
+  // NOTE: Twilio reserves HELP for compliance and may auto-respond instead of forwarding.
+  // So we use "guide" and "how does this work".
+  const normalizeCommand = (t: string): string =>
+    (t ?? "")
+      .toLowerCase()
+      .trim()
+      // Strip punctuation so "help?" still works.
+      .replace(/[^a-z0-9\s]/g, "")
+      .replace(/\s+/g, " ");
+
+  const cmd = normalizeCommand(_ctx.body ?? "");
+  const isHelpCommand = cmd === "guide" || cmd === "how does this work";
+
+  if (isHelpCommand) {
+    const sms = buildSchedulerHowItWorksSms({ activityName: activity.name });
+    const sid = await sendSms(user.phone_number, sms);
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: sms,
+        twilio_sid: sid,
+        attributes: { kind: "help" },
+      },
+    });
+    return;
+  }
 
   // Pull most recent conversation history to provide context to the LLM.
   // NOTE: we include the inbound message that was just persisted by the webhook handler.
@@ -370,8 +496,61 @@ export async function onInboundTwilioMessage(
       rawText: decision.rawText,
     });
 
+    if (decision.decision === "cancel") {
+      const sms = "No problem — I scratched that draft. Text me anytime to start a new one.";
+      const sid = await sendSms(user.phone_number, sms);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: sms,
+          twilio_sid: sid,
+          attributes: {
+            kind: "event_confirmation_cancel",
+          },
+        },
+      });
+
+      // Clear any in-progress scheduling state.
+      const nextState = {
+        ...(state as unknown as Prisma.JsonObject),
+      } as Prisma.JsonObject;
+
+      delete (nextState as any).pendingEvent;
+      delete (nextState as any).activeDraft;
+
+      await prisma.conversation.update({
+        where: { conversation_id: _ctx.conversationId },
+        data: { state: nextState as unknown as Prisma.InputJsonValue },
+      });
+
+      return;
+    }
+
     if (decision.decision === "confirm") {
       const d = state.pendingEvent.draft;
+
+      // If we somehow reached confirmation without complete time details, ask to fix.
+      // (Should be rare; kept defensive.)
+      if (!d.startIso || !d.endIso) {
+        const ask = "I’m missing the exact end time. What end time (or duration) should I use?";
+        const sid = await sendSms(user.phone_number, ask);
+        await prisma.conversationMessage.create({
+          data: {
+            conversation_id: _ctx.conversationId,
+            role: "assistant",
+            direction: "outbound",
+            content: ask,
+            twilio_sid: sid,
+            attributes: {
+              needs: "end_time",
+              reason: "missing_end_time_on_confirm",
+            },
+          },
+        });
+        return;
+      }
 
       const preferredMembersForPlan = homies.filter((m) =>
         d.preferredMemberIds.includes(m.member_id)
@@ -513,6 +692,7 @@ export async function onInboundTwilioMessage(
       delete (nextState as any).pendingEvent;
       delete (nextState as any).createdEventId;
       delete (nextState as any).draftEvent;
+      delete (nextState as any).activeDraft;
 
       await prisma.conversation.update({
         where: { conversation_id: _ctx.conversationId },
@@ -524,7 +704,102 @@ export async function onInboundTwilioMessage(
 
     if (decision.decision === "edit") {
       // Draft edit mode: keep pending draft and apply invite-plan edits deterministically.
-      const d = state.pendingEvent.draft;
+      const d0 = state.pendingEvent.draft;
+
+      // First: apply any *detail* edits (time/location/note) from the latest user message.
+      const timePatchRes = await analyzeEventTimePatch({
+        userTimezone: user.timezone,
+        existingStartIso: d0.startIso,
+        existingEndIso: d0.endIso,
+        // Latest message is enough because we seed existingStart/end.
+        messages: [{ role: "user", content: _ctx.body }],
+      });
+
+      const locRes = await analyzeConversationLocation(
+        [{ role: "user", content: _ctx.body }],
+        buildLocationAnalyzerSystemPrompt()
+      );
+
+      const inviteMsgRes = await analyzeConversationInviteMessage(
+        [{ role: "user", content: _ctx.body }],
+        buildInviteMessageAnalyzerSystemPrompt()
+      );
+
+      // Copy draft so we can mutate.
+      const d = { ...d0 };
+
+      // Location edit
+      if (locRes.eventLocationProvided && typeof locRes.eventLocation === "string" && locRes.eventLocation.trim()) {
+        d.location = locRes.eventLocation.trim();
+      }
+
+      // Invite note edit
+      if (inviteMsgRes.inviteMessageProvided) {
+        d.inviteMessage = inviteMsgRes.inviteMessage;
+      }
+
+      // Time edit
+      if (timePatchRes.ok) {
+        const p = timePatchRes.patch;
+        const startChanged = typeof p.startIso === "string" && p.startIso.trim().length > 0 && p.startIso !== d.startIso;
+
+        if (p.startIso) d.startIso = p.startIso;
+
+        if (p.endIso) {
+          d.endIso = p.endIso;
+        } else if (typeof p.durationMinutes === "number") {
+          // Convert duration to end.
+          const startDt = DateTime.fromISO(d.startIso, { setZone: true });
+          if (startDt.isValid) {
+            const endDt = startDt.plus({ minutes: p.durationMinutes });
+            d.endIso = endDt.toISO({ suppressMilliseconds: true }) ?? endDt.toISO() ?? d.endIso;
+          }
+        } else if (startChanged) {
+          // If user changed the start but didn't provide an updated end/duration,
+          // move back to collecting mode so we can ask for the end.
+          const updatedAtIso = new Date().toISOString();
+          const nextState = {
+            ...(state as unknown as Prisma.JsonObject),
+          } as Prisma.JsonObject;
+
+          nextState.activeDraft = {
+            status: "collecting_details",
+            activityId: d.activityId,
+            location: d.location,
+            startIso: d.startIso,
+            // end intentionally omitted to force a follow-up.
+            preferredNames: d.preferredNamesForSms,
+            maxHomies: d.maxHomies,
+            inviteMessage: d.inviteMessage,
+            updatedAtIso,
+          } as unknown as Prisma.JsonValue;
+
+          delete (nextState as any).pendingEvent;
+
+          const ask = "Got it — what end time should I use? (or how long?)";
+          const sid = await sendSms(user.phone_number, ask);
+          await prisma.conversationMessage.create({
+            data: {
+              conversation_id: _ctx.conversationId,
+              role: "assistant",
+              direction: "outbound",
+              content: ask,
+              twilio_sid: sid,
+              attributes: {
+                needs: "end_time",
+                reason: "start_changed_requires_end",
+              },
+            },
+          });
+
+          await prisma.conversation.update({
+            where: { conversation_id: _ctx.conversationId },
+            data: { state: nextState as unknown as Prisma.InputJsonValue },
+          });
+
+          return;
+        }
+      }
 
       const immediateIds = d.immediateMemberIds ?? [];
       const followUpIds = d.followUpMemberIds ?? [];
@@ -582,6 +857,48 @@ export async function onInboundTwilioMessage(
         return;
       }
 
+      // Apply invite-policy edits during confirmation.
+      // LLM-based so the user can say things like "hand picked", "no backups", etc.
+      const policySystemPrompt = buildInvitePolicyIntentAnalyzerSystemPrompt();
+      const { intent: policyIntent, rawText: policyRawText } = await analyzeInvitePolicyIntent({
+        systemPrompt: policySystemPrompt,
+        messages: [
+          { role: "assistant", content: d.previewSms },
+          { role: "user", content: _ctx.body ?? "" },
+        ],
+      });
+
+      logger.info("invitePolicyIntent.confirmation", {
+        intent: policyIntent,
+        rawText: policyRawText,
+      });
+
+      const nextPolicy =
+        policyIntent.policy && policyIntent.confidence !== "low"
+          ? policyIntent.policy
+          : null;
+
+      if (nextPolicy && nextPolicy !== d.invitePolicy) {
+        d.invitePolicy = nextPolicy;
+
+        // If switching to an exact/handpicked policy, ensure the draft semantics match:
+        // - exact means invite ONLY the explicit list (no backups)
+        // - event creation uses preferredMemberIds as the pool when policy is exact
+        if (nextPolicy === "exact") {
+          d.preferredMemberIds = patched.plan.immediateMemberIds;
+          d.preferredNamesForSms = patched.immediateNames;
+          d.maxHomies = patched.plan.immediateMemberIds.length;
+        }
+      }
+
+      // If we're now exact, force follow-ups empty (no backups).
+      const finalImmediateIds = patched.plan.immediateMemberIds;
+      const finalFollowUpIds = d.invitePolicy === "exact" ? [] : patched.plan.followUpMemberIds;
+      const finalImmediateNames = patched.immediateNames;
+      const finalFollowUpNames = d.invitePolicy === "exact" ? [] : patched.followUpNames;
+      const finalExcludedIds = patched.plan.excludedMemberIds;
+      const finalExcludedNames = patched.excludedNames;
+
       const previewWithEdits = buildEventDraftPreviewSms({
         activityName: activity.name,
         location: d.location,
@@ -592,9 +909,9 @@ export async function onInboundTwilioMessage(
         maxHomies: d.maxHomies,
         inviteMessage: d.inviteMessage,
         invitePolicy: d.invitePolicy,
-        immediateNames: patched.immediateNames,
-        followUpNames: patched.followUpNames,
-        excludedNames: patched.excludedNames,
+        immediateNames: finalImmediateNames,
+        followUpNames: finalFollowUpNames,
+        excludedNames: finalExcludedNames,
       });
 
       const sid = await sendSms(user.phone_number, previewWithEdits);
@@ -620,12 +937,12 @@ export async function onInboundTwilioMessage(
         status: "awaiting_confirmation",
         draft: {
           ...d,
-          immediateMemberIds: patched.plan.immediateMemberIds,
-          followUpMemberIds: patched.plan.followUpMemberIds,
-          excludedMemberIds: patched.plan.excludedMemberIds,
-          immediateNamesForSms: patched.immediateNames,
-          followUpNamesForSms: patched.followUpNames,
-          excludedNamesForSms: patched.excludedNames,
+          immediateMemberIds: finalImmediateIds,
+          followUpMemberIds: finalFollowUpIds,
+          excludedMemberIds: finalExcludedIds,
+          immediateNamesForSms: finalImmediateNames,
+          followUpNamesForSms: finalFollowUpNames,
+          excludedNamesForSms: finalExcludedNames,
           previewSms: previewWithEdits,
           previewSentAtIso: updatedAtIso,
         },
@@ -656,468 +973,602 @@ export async function onInboundTwilioMessage(
     }
   }
 
-  // If the user explicitly referenced a branded invite policy, use it to shape
-  // follow-up questions and conflict checks.
-  const policyHint = detectInvitePolicyHintFromMessages(messages);
+  // =========================
+  // Collecting-details mode
+  // =========================
 
-  // Use only USER messages for analyzers so assistant recap/preview text doesn't get
-  // mistakenly treated as user-provided facts.
+  // If the user explicitly referenced a branded invite policy, use it to shape follow-up questions.
+  const policyHint = await detectInvitePolicyHintFromMessages(messages);
+
+  // Use only USER messages for analyzers.
   const userOnlyMessages = messages.filter((m) => m.role === "user");
 
   const locationAnalyzerSystemPrompt = buildLocationAnalyzerSystemPrompt();
-  const homiesAnalyzerSystemPrompt = buildHomiesAnalyzerSystemPrompt({
-    homiesList,
-  });
-  const inviteMessageAnalyzerSystemPrompt =
-    buildInviteMessageAnalyzerSystemPrompt();
+  const homiesAnalyzerSystemPrompt = buildHomiesAnalyzerSystemPrompt({ homiesList });
+  const inviteMessageAnalyzerSystemPrompt = buildInviteMessageAnalyzerSystemPrompt();
 
-  logger.debug?.("Conversation messages", { count: messages.length });
+  const updatedAtIso = new Date().toISOString();
 
-  const analysisResults = await Promise.allSettled([
+  const prevDraft: ActiveEventDraft =
+    state.activeDraft?.status === "collecting_details" &&
+    state.activeDraft.activityId === activity.activity_id
+      ? state.activeDraft
+      : {
+          status: "collecting_details",
+          activityId: activity.activity_id,
+          updatedAtIso,
+        };
+
+  const isNewPlanningSession =
+    !(state.activeDraft?.status === "collecting_details") ||
+    state.activeDraft.activityId !== activity.activity_id;
+
+  // Analyze conversation and merge into draft.
+  const [loc, homiesRes, inviteMsgRes] = await Promise.all([
     analyzeConversationLocation(userOnlyMessages, locationAnalyzerSystemPrompt),
     analyzeConversationHomies(userOnlyMessages, homiesAnalyzerSystemPrompt, homieNames),
-    analyzeConversationInviteMessage(
-      userOnlyMessages,
-      inviteMessageAnalyzerSystemPrompt
-    ),
+    analyzeConversationInviteMessage(userOnlyMessages, inviteMessageAnalyzerSystemPrompt),
   ]);
 
-  const [locationRes, homiesRes, inviteMessageRes] = analysisResults;
+  // Time patch: latest message (with existing draft start/end seeded).
+  // Time extraction strategy:
+  // 1) Try deterministic parsing for common SMS patterns (e.g. "10p", "11pm", "for 90 minutes").
+  // 2) Fall back to the LLM-based patch analyzer.
+  const nowInUserTz = DateTime.now().setZone(user.timezone);
+  const bodyText = _ctx.body ?? "";
+  const dayOffset = detectExplicitDayOffset(bodyText);
+  const dur = parseDurationMinutes(bodyText);
+  const rangeTod = parseTimeRangeOfDay(bodyText);
+  const tod = parseSimpleTimeOfDay(bodyText);
+  const { isStart: mentionsStart, isEnd: mentionsEnd } = textMentionsStartOrEnd(bodyText);
 
-  const locationAnalysis =
-    locationRes.status === "fulfilled"
-      ? locationRes.value
-      : {
-          eventLocationProvided: false,
-          eventLocation: null,
-          rawText: String(locationRes.reason),
-        };
+  const expectingEnd = Boolean(prevDraft.startIso) && !prevDraft.endIso;
+  const expectingStart = !prevDraft.startIso;
 
-  const homiesAnalysis =
-    homiesRes.status === "fulfilled"
-      ? homiesRes.value
-      : {
-          homiesProvided: false,
-          homies: null,
-          maxHomies: null,
-          rawText: String(homiesRes.reason),
-        };
+  let timePatchRes:
+    | { ok: true; patch: { startIso?: string; endIso?: string; durationMinutes?: number } }
+    | { ok: false; reason: string } = { ok: false, reason: "no_time_patch" };
 
-  const inviteMessageAnalysis =
-    inviteMessageRes.status === "fulfilled"
-      ? inviteMessageRes.value
-      : {
-          inviteMessageProvided: false,
-          inviteMessage: null,
-          rawText: String(inviteMessageRes.reason),
-        };
+  if (Number.isFinite(dur as any) && typeof dur === "number") {
+    timePatchRes = { ok: true, patch: { durationMinutes: dur } };
+  } else if (rangeTod && nowInUserTz.isValid) {
+    // Parse full time ranges like "from 1pm to 3pm tomorrow".
+    // If an explicit day anchor is provided, honor it for the start.
+    // Otherwise anchor the start relative to now, then anchor the end to the same day as the start.
 
-  logger.info("locationAnalysis", locationAnalysis);
-  logger.info("homiesAnalysis", homiesAnalysis);
-  logger.info("inviteMessageAnalysis", inviteMessageAnalysis);
+    const startAnchored =
+      typeof dayOffset === "number"
+        ? anchorTimeOfDayToExplicitDayOffset({
+            userTimezone: user.timezone,
+            now: nowInUserTz,
+            tod: rangeTod.start,
+            dayOffset,
+          })
+        : anchorTimeOfDayToNow({ userTimezone: user.timezone, now: nowInUserTz, tod: rangeTod.start });
 
-  // Invite-message extraction is best-effort; do not block event creation on it.
-  const allAnalyzersSucceeded =
-    locationRes.status === "fulfilled" && homiesRes.status === "fulfilled";
+    let endAnchored = anchorTimeOfDayToReferenceDay({ reference: startAnchored, tod: rangeTod.end });
 
-  // NOTE: even if analyzers succeeded, they may say "provided=false". We only create
-  // when the extracted values pass our completion gate.
-  const completionGatePassed =
-    locationAnalysis.eventLocationProvided &&
-    typeof locationAnalysis.eventLocation === "string" &&
-    locationAnalysis.eventLocation.trim().length > 0 &&
-    homiesAnalysis.homiesProvided;
-
-  if (allAnalyzersSucceeded && completionGatePassed) {
-    const preferredNames = homiesAnalysis.homies ?? [];
-
-    // max_participants is homies-only (does NOT include the user)
-    let maxHomies = computeMaxParticipantsTotal(
-      homiesAnalysis.maxHomies,
-      homiesAnalysis.homies
-    );
-
-    if (maxHomies === null) {
-      // If user asked for Handpicked Invite but didn't list names, ask for names (not a number).
-      if (policyHint === "exact") {
-        const ask = "Handpicked Invite — who should I invite? Reply with the homies’ names.";
-        const sid = await sendSms(user.phone_number, ask);
-        await prisma.conversationMessage.create({
-          data: {
-            conversation_id: _ctx.conversationId,
-            role: "assistant",
-            direction: "outbound",
-            content: ask,
-            twilio_sid: sid,
-            attributes: {
-              needs: "homie_names",
-              policyHint,
-            },
-          },
-        });
-        return;
-      }
-
-      const ask = "How many homies should I invite?";
-      const sid = await sendSms(user.phone_number, ask);
-      await prisma.conversationMessage.create({
-        data: {
-          conversation_id: _ctx.conversationId,
-          role: "assistant",
-          direction: "outbound",
-          content: ask,
-          twilio_sid: sid,
-          attributes: {
-            needs: "max_homies",
-            policyHint,
-          },
-        },
-      });
-      return;
+    // Overnight support: if end <= start, bump end to the next day.
+    if (endAnchored <= startAnchored) {
+      endAnchored = endAnchored.plus({ days: 1 });
     }
 
-    maxHomies = Math.trunc(maxHomies);
+    timePatchRes = {
+      ok: true,
+      patch: {
+        startIso: startAnchored.toISO({ suppressMilliseconds: true }) ?? startAnchored.toISO() ?? "",
+        endIso: endAnchored.toISO({ suppressMilliseconds: true }) ?? endAnchored.toISO() ?? "",
+      },
+    };
+  } else if (tod && nowInUserTz.isValid) {
+    // Heuristic assignment:
+    // - If the user explicitly mentions end/until OR we are expecting an end, treat as end.
+    // - Else treat as start.
+    const treatAsEnd = mentionsEnd || (expectingEnd && !mentionsStart);
+    const treatAsStart = mentionsStart || (!treatAsEnd && expectingStart);
 
-    if (!Number.isFinite(maxHomies) || maxHomies < 1) {
-      const ask = "How many homies should I invite? (number >= 1)";
-      const sid = await sendSms(user.phone_number, ask);
-      await prisma.conversationMessage.create({
-        data: {
-          conversation_id: _ctx.conversationId,
-          role: "assistant",
-          direction: "outbound",
-          content: ask,
-          twilio_sid: sid,
-        },
-      });
-      return;
-    }
-
-    // If we have fewer onboarded homies than needed, cap to what's available.
-    const desiredMemberCount = maxHomies;
-    if (desiredMemberCount > homies.length) {
-      logger.info(
-        "Capping max_participants because not enough homies onboarded",
-        {
-          requestedMaxHomies: maxHomies,
-          availableHomies: homies.length,
-        }
-      );
-      maxHomies = homies.length;
-    }
-
-    // If user named too many preferred homies for capacity, ask for clarification.
-    if (preferredNames.length > maxHomies) {
-      const ask = `You listed ${preferredNames.length} homies, but you asked me to invite only ${maxHomies}. Who should I include?`;
-      const sid = await sendSms(user.phone_number, ask);
-      await prisma.conversationMessage.create({
-        data: {
-          conversation_id: _ctx.conversationId,
-          role: "assistant",
-          direction: "outbound",
-          content: ask,
-          twilio_sid: sid,
-          attributes: {
-            preferredNames,
-            maxHomies,
-            policyHint,
-          },
-        },
-      });
-      return;
-    }
-
-    // If user explicitly said "Priority Invite" but didn't include a total capacity,
-    // we want to ask for the total number to invite.
-    if (policyHint === "prioritized" && homiesAnalysis.maxHomies === null && preferredNames.length > 0) {
-      const ask = `Priority Invite — what’s the total number of homies I should invite? (Including ${preferredNames.length} you named)`;
-      const sid = await sendSms(user.phone_number, ask);
-      await prisma.conversationMessage.create({
-        data: {
-          conversation_id: _ctx.conversationId,
-          role: "assistant",
-          direction: "outbound",
-          content: ask,
-          twilio_sid: sid,
-          attributes: {
-            needs: "max_homies",
-            policyHint,
-            preferredNames,
-          },
-        },
-      });
-      return;
-    }
-
-    const normalizedTimes = await extractAndNormalizeEventTimesFromConversation(
-      {
+    // Anchor strategy:
+    // - If user explicitly said "tomorrow"/"today", honor that.
+    // - If we are treating this as an END time and we already have a start date, anchor to start's date.
+    // - Else anchor relative to now.
+    let anchored: DateTime;
+    if (typeof dayOffset === "number") {
+      anchored = anchorTimeOfDayToExplicitDayOffset({
         userTimezone: user.timezone,
-        location: locationAnalysis.eventLocation!,
-        messages: userOnlyMessages,
+        now: nowInUserTz,
+        tod,
+        dayOffset,
+      });
+    } else if (treatAsEnd && prevDraft.startIso) {
+      const startRef = DateTime.fromISO(prevDraft.startIso, { setZone: true });
+      anchored = startRef.isValid
+        ? anchorTimeOfDayToReferenceDay({ reference: startRef, tod })
+        : anchorTimeOfDayToNow({ userTimezone: user.timezone, now: nowInUserTz, tod });
+
+      // Overnight support: if end <= start, bump end to next day.
+      if (startRef.isValid && anchored <= startRef) {
+        anchored = anchored.plus({ days: 1 });
       }
-    );
-
-    if (!normalizedTimes.ok) {
-      logger.info("Time normalization failed", normalizedTimes);
-      const ask =
-        "I couldn’t confirm the time.\nWhat exact start + end time should I use?";
-      const sid = await sendSms(user.phone_number, ask);
-      await prisma.conversationMessage.create({
-        data: {
-          conversation_id: _ctx.conversationId,
-          role: "assistant",
-          direction: "outbound",
-          content: ask,
-          twilio_sid: sid,
-          attributes: {
-            reason: normalizedTimes.reason,
-          },
-        },
-      });
-      return;
+    } else {
+      anchored = anchorTimeOfDayToNow({ userTimezone: user.timezone, now: nowInUserTz, tod });
     }
 
-    const explicitResolution = resolveExplicitHomiesForEvent({
-      allMembers: homies,
-      preferredNames,
-      maxHomies,
-    });
+    const iso = anchored.toISO({ suppressMilliseconds: true }) ?? anchored.toISO() ?? "";
 
-    if (!explicitResolution.ok) {
-      const sid = await sendSms(user.phone_number, explicitResolution.reason);
-      await prisma.conversationMessage.create({
-        data: {
-          conversation_id: _ctx.conversationId,
-          role: "assistant",
-          direction: "outbound",
-          content: explicitResolution.reason,
-          twilio_sid: sid,
-        },
-      });
-      return;
+    if (treatAsEnd) {
+      timePatchRes = { ok: true, patch: { endIso: iso } };
+    } else if (treatAsStart) {
+      timePatchRes = { ok: true, patch: { startIso: iso } };
+    } else {
+      // If both or neither, default to start.
+      timePatchRes = { ok: true, patch: { startIso: iso } };
     }
-
-    // IMPORTANT:
-    // - Exact list => preferredMembers are the entire invite list.
-    // - Any N => preferredMembers is empty (we do NOT pick names).
-    // - X + others => preferredMembers are ONLY the explicitly prioritized names.
-    // In all cases, we only ever show (and persist) explicitly named homies.
-    const preferredMembers = explicitResolution.preferredMembers;
-    const preferredNamesForSms = preferredMembers.map(fullNameForMember);
-
-    const invitePolicy = deriveInvitePolicy({
-      preferredCount: preferredMembers.length,
-      maxHomies,
+  } else {
+    const llmRes = await analyzeEventTimePatch({
+      userTimezone: user.timezone,
+      existingStartIso: prevDraft.startIso,
+      existingEndIso: prevDraft.endIso,
+      messages: [{ role: "user", content: bodyText }],
     });
+    timePatchRes = llmRes.ok
+      ? { ok: true, patch: llmRes.patch }
+      : { ok: false, reason: llmRes.reason };
+  }
 
-    // If user explicitly stated a branded policy and it conflicts with what we inferred from
-    // the count/list rules, ask for confirmation.
-    if (policyHint && policyHint !== invitePolicy) {
-      const ask = `Quick check — do you want ${brandedInvitePolicyName(
-        policyHint
-      )}, or ${brandedInvitePolicyName(invitePolicy)}?`;
-      const sid = await sendSms(user.phone_number, ask);
-      await prisma.conversationMessage.create({
-        data: {
-          conversation_id: _ctx.conversationId,
-          role: "assistant",
-          direction: "outbound",
-          content: ask,
-          twilio_sid: sid,
-          attributes: {
-            needs: "invite_policy_confirmation",
-            policyHint,
-            inferredPolicy: invitePolicy,
-            maxHomies,
-            preferredNames: preferredNamesForSms,
-          },
-        },
-      });
-      return;
+  const nextDraft: ActiveEventDraft = {
+    ...prevDraft,
+    updatedAtIso,
+  };
+
+  if (loc.eventLocationProvided && typeof loc.eventLocation === "string" && loc.eventLocation.trim()) {
+    nextDraft.location = loc.eventLocation.trim();
+  }
+
+  if (inviteMsgRes.inviteMessageProvided) {
+    nextDraft.inviteMessage = inviteMsgRes.inviteMessage;
+  }
+
+  if (homiesRes.homiesProvided) {
+    if (Array.isArray(homiesRes.homies) && homiesRes.homies.length > 0) {
+      nextDraft.preferredNames = homiesRes.homies;
     }
-
-    // Defensive: exact-list must match capacity.
-    if (invitePolicy === "exact" && preferredMembers.length !== maxHomies) {
-      const ask = `Just to confirm — do you want to invite exactly ${preferredMembers.length} homies, or invite ${maxHomies}?`;
-      const sid = await sendSms(user.phone_number, ask);
-      await prisma.conversationMessage.create({
-        data: {
-          conversation_id: _ctx.conversationId,
-          role: "assistant",
-          direction: "outbound",
-          content: ask,
-          twilio_sid: sid,
-          attributes: {
-            preferredNames: preferredNamesForSms,
-            maxHomies,
-          },
-        },
-      });
-      return;
+    if (typeof homiesRes.maxHomies === "number" && Number.isFinite(homiesRes.maxHomies)) {
+      nextDraft.maxHomies = Math.trunc(homiesRes.maxHomies);
     }
+  }
 
-    // Lock the invite plan at preview-time so names don't reshuffle at confirmation.
-    const plan = buildInvitePlan({
-      invitePolicy,
-      maxHomies,
-      allMembers: homies,
-      preferredMembers,
+  if (timePatchRes.ok) {
+    const p = timePatchRes.patch;
+    const startChanged = typeof p.startIso === "string" && p.startIso.trim().length > 0 && p.startIso !== nextDraft.startIso;
+
+    if (p.startIso) nextDraft.startIso = p.startIso;
+    if (p.endIso) nextDraft.endIso = p.endIso;
+    if (typeof p.durationMinutes === "number") nextDraft.durationMinutes = p.durationMinutes;
+
+    // If the user changed the start without giving an updated end/duration, invalidate end so we can ask.
+    if (startChanged && !p.endIso && typeof p.durationMinutes !== "number") {
+      nextDraft.endIso = undefined;
+      nextDraft.durationMinutes = undefined;
+    }
+  }
+
+  // Guardrail / feature: support overnight events.
+  // If end is not after start, bump end to the next day.
+  if (nextDraft.startIso && nextDraft.endIso) {
+    const s = DateTime.fromISO(nextDraft.startIso, { setZone: true });
+    const e = DateTime.fromISO(nextDraft.endIso, { setZone: true });
+    if (s.isValid && e.isValid && e <= s) {
+      const bumped = e.plus({ days: 1 });
+      nextDraft.endIso = bumped.toISO({ suppressMilliseconds: true }) ?? bumped.toISO() ?? nextDraft.endIso;
+    }
+  }
+
+  logger.info("activeDraft", {
+    location: nextDraft.location,
+    startIso: nextDraft.startIso,
+    endIso: nextDraft.endIso,
+    durationMinutes: nextDraft.durationMinutes,
+    maxHomies: nextDraft.maxHomies,
+    preferredNamesCount: nextDraft.preferredNames?.length ?? 0,
+  });
+
+  // Decide next action based on missing fields.
+  const hasLocation = Boolean(nextDraft.location && nextDraft.location.trim().length > 0);
+  const hasStart = Boolean(nextDraft.startIso && nextDraft.startIso.trim().length > 0);
+  const hasEnd = Boolean(nextDraft.endIso && nextDraft.endIso.trim().length > 0);
+  const hasDuration = typeof nextDraft.durationMinutes === "number" && nextDraft.durationMinutes > 0;
+
+  const hasPreferred = Array.isArray(nextDraft.preferredNames) && nextDraft.preferredNames.length > 0;
+  const hasMax = typeof nextDraft.maxHomies === "number" && Number.isFinite(nextDraft.maxHomies) && nextDraft.maxHomies > 0;
+  const homiesProvided = hasPreferred || hasMax;
+
+  // Ask for all missing details at once (less choppy).
+  const missing: Array<{ key: string; prompt: string }> = [];
+  if (!hasLocation) missing.push({ key: "location", prompt: "Where should it be?" });
+  if (!hasStart) {
+    // If we don't yet have a start time, ask for the full range up-front.
+    // (This reads better and reduces back-and-forth.)
+    missing.push({
+      key: "event_time",
+      prompt: "What start & end time should I use?",
     });
+  }
+  if (hasStart && !hasEnd && !hasDuration) {
+    missing.push({ key: "end_time", prompt: "What end time should I use? (or how long?)" });
+  }
 
-    const previewWithPlan = buildEventDraftPreviewSms({
-      activityName: activity.name,
-      location: locationAnalysis.eventLocation!,
-      start: normalizedTimes.start,
-      end: normalizedTimes.end,
-      timeZone: user.timezone,
-      preferredNames: preferredNamesForSms,
-      maxHomies,
-      inviteMessage: inviteMessageAnalysis.inviteMessage,
-      invitePolicy,
-      immediateNames: plan.immediate.map(fullNameForMember),
-      followUpNames: plan.followUp.map(fullNameForMember),
+  if (!homiesProvided) {
+    if (policyHint === "exact") {
+      missing.push({
+        key: "homie_names",
+        prompt: "Handpicked Invite — who should I invite? Reply with the homies’ names.",
+      });
+    } else {
+      missing.push({ key: "max_homies", prompt: "How many homies should I invite?" });
+    }
+  } else if (policyHint === "prioritized" && hasPreferred && !hasMax) {
+    missing.push({
+      key: "max_homies",
+      prompt: `Priority Invite — what’s the total number of homies I should invite? (Including ${nextDraft.preferredNames!.length} you named)`,
     });
+  }
 
-    const sid = await sendSms(user.phone_number, previewWithPlan);
+  // Keep this SMS-friendly and scannable.
+  const ask = missing.length
+    ? missing.map((m) => `- ${m.prompt}`).join("\n")
+    : null;
+  const askNeeds = missing.length ? missing.map((m) => m.key).join(",") : null;
 
+  // Persist draft state no matter what.
+  const draftStateUpdate = {
+    ...(state as unknown as Prisma.JsonObject),
+    activeDraft: nextDraft as unknown as Prisma.InputJsonValue,
+  } as Prisma.JsonObject;
+
+  if (ask) {
+    // Make the first scheduling message feel more natural + remind the user of their activity.
+    const activityName = (activity.name ?? "").trim() || "your activity";
+    const normalizeQuick = (t: string): string =>
+      (t ?? "")
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9\s]/g, "")
+        .replace(/\s+/g, " ");
+
+    const t = normalizeQuick(_ctx.body ?? "");
+    const isGreeting =
+      t === "hi" ||
+      t === "hello" ||
+      t === "hey" ||
+      t === "hi there" ||
+      t === "hello there" ||
+      t === "hey there";
+
+    const firstName = (user.first_name ?? "").trim();
+    const heyLine = firstName.length ? `Hey ${firstName}!` : "Hey!";
+
+    const header = isNewPlanningSession
+      ? isGreeting
+        ? `${heyLine} Want to schedule your ${activityName}?`
+        : `Let’s schedule your ${activityName}.`
+      : `For ${activityName}, I still need:`;
+
+    const hint = "Reply “guide” if you want to see how invites work.";
+
+    const askWithContext = [header, ask, "", hint].join("\n").trim();
+
+    const sid = await sendSms(user.phone_number, askWithContext);
     await prisma.conversationMessage.create({
       data: {
         conversation_id: _ctx.conversationId,
         role: "assistant",
         direction: "outbound",
-        content: previewWithPlan,
+        content: askWithContext,
         twilio_sid: sid,
         attributes: {
-          needs: "event_confirmation",
+          ...(askNeeds ? { needs: askNeeds } : {}),
+          ...(policyHint ? { policyHint } : {}),
+          ...(isNewPlanningSession ? { planningSession: "started" } : {}),
         },
       },
     });
 
-    const updatedAtIso = new Date().toISOString();
-    const nextState = {
-      ...(state as unknown as Prisma.JsonObject),
-    } as Prisma.JsonObject;
-
-    nextState.pendingEvent = {
-      status: "awaiting_confirmation",
-      draft: {
-        activityId: activity.activity_id,
-        location: locationAnalysis.eventLocation!,
-        startIso: normalizedTimes.startIso,
-        endIso: normalizedTimes.endIso,
-        maxHomies,
-        invitePolicy,
-        preferredMemberIds: preferredMembers.map((m) => m.member_id),
-        preferredNamesForSms,
-        immediateMemberIds: plan.immediate.map((m) => m.member_id),
-        followUpMemberIds: plan.followUp.map((m) => m.member_id),
-        immediateNamesForSms: plan.immediate.map(fullNameForMember),
-        followUpNamesForSms: plan.followUp.map(fullNameForMember),
-        excludedMemberIds: [],
-        excludedNamesForSms: [],
-        inviteMessage: inviteMessageAnalysis.inviteMessage,
-        previewSms: previewWithPlan,
-        previewSentAtIso: updatedAtIso,
-      },
-    };
-
     await prisma.conversation.update({
       where: { conversation_id: _ctx.conversationId },
-      data: {
-        state: nextState as unknown as Prisma.InputJsonValue,
-      },
+      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
     });
 
     return;
   }
 
-  // Otherwise: ask for missing info conversationally.
-  {
-    const system = `You are Buckfifty, ${user.first_name}'s scheduling assistant. All communication happens via SMS text messaging. Your responses must be short, clear, and easy to read on a phone screen.
+  // If we get here, we have enough information to generate a preview.
+  // Compute start/end.
+  const startIso = nextDraft.startIso!;
+  let endIso = nextDraft.endIso;
 
-Your role is to help ${user.first_name} plan and schedule the ${activity.name} they signed up for by coordinating with their onboarded homies.
+  if (!endIso && hasDuration) {
+    const startDt = DateTime.fromISO(startIso, { setZone: true });
+    if (startDt.isValid) {
+      const endDt = startDt.plus({ minutes: nextDraft.durationMinutes! });
+      endIso = endDt.toISO({ suppressMilliseconds: true }) ?? endDt.toISO() ?? undefined;
+    }
+  }
 
-Your sole objective is to collect event details so the Buckfifty app can coordinate attendance.
-
-You must collect:
-1. Event location
-2. Event start time
-3. Event end time OR duration (optional; if not provided, default duration is 2 hours)
-4. Homies to invite
-
-Available homies (you may ONLY select from this list):
-${homiesList}
-
-Homies rules:
-- Accept either:
-  - A specific list of homies chosen ONLY from the available homies above, or
-  - A maximum number of homies to invite
-- If no homie list is provided, you MUST ask for the maximum number
-- Do NOT invent, suggest, or accept homies outside of the provided list
-
-Invite policy branding (the user may reference these explicitly):
-- Open Invite: user wants "any N" homies (no specific names required)
-- Priority Invite: user names must-invite homies, then you fill remaining invite slots up to N
-- Handpicked Invite: only invite the exact homies the user lists
-
-If the user references one of these policies but leaves out required details, ask the right follow-up:
-- Handpicked Invite but no names => ask them to list names.
-- Open Invite but no number => ask how many homies.
-- Priority Invite but missing total N => ask for the total number to invite.
-
-When it helps, use the branded names in your questions (Open Invite / Priority Invite / Handpicked Invite).
-
-SMS formatting rules:
-- Keep messages short (1-3 short lines when possible)
-- Use simple line breaks for readability
-- Avoid long paragraphs, markdown, or emojis
-
-Behavior rules:
-- Ask only for missing information all at once
-- Do not assume or infer details
-- Be friendly, concise, and conversational
-- Do not perform availability checks or coordination
-- Avoid repeating questions already answered
-- Assume all provided times are in the user's local time
-- Do NOT mention timezones in your messages (no IANA names like "America/Los_Angeles", no abbreviations like "PT", and no UTC offsets)
-
-Once location, start time, and homie selection (or max count) are collected, confirm completion and stop.`;
-
-    const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
-
-    const { text } = await chat({
-      tag: "assistantReply",
-      system,
-      messages,
-      model,
-      temperature: 0.3,
-    });
-
-    const reply = (text ?? "").trim();
-
-    logger.info("assistant.reply.generated", { reply });
-
-    // Send reply to the user via SMS
-    const outboundSid = await sendSms(
-      user.phone_number,
-      reply || "(no response)"
-    );
-
-    // Persist outbound assistant message to keep the conversation history consistent.
+  if (!endIso) {
+    // Should be unreachable due to gating above, but keep defensive.
+    const fallbackAsk = "What end time should I use? (or how long?)";
+    const sid = await sendSms(user.phone_number, fallbackAsk);
     await prisma.conversationMessage.create({
       data: {
         conversation_id: _ctx.conversationId,
         role: "assistant",
         direction: "outbound",
-        content: reply || "(no response)",
-        twilio_sid: outboundSid,
+        content: fallbackAsk,
+        twilio_sid: sid,
+        attributes: { needs: "end_time", reason: "end_time_missing_after_gate" },
+      },
+    });
+    await prisma.conversation.update({
+      where: { conversation_id: _ctx.conversationId },
+      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+    });
+    return;
+  }
+
+  // max_participants is homies-only (does NOT include the user)
+  const preferredNames = nextDraft.preferredNames ?? [];
+  let maxHomies = computeMaxParticipantsTotal(nextDraft.maxHomies ?? null, preferredNames.length ? preferredNames : null);
+
+  if (maxHomies === null) {
+    // Should be unreachable due to gating, but keep defensive.
+    const sid = await sendSms(user.phone_number, "How many homies should I invite?");
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: "How many homies should I invite?",
+        twilio_sid: sid,
+        attributes: { needs: "max_homies" },
+      },
+    });
+    await prisma.conversation.update({
+      where: { conversation_id: _ctx.conversationId },
+      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+    });
+    return;
+  }
+
+  maxHomies = Math.trunc(maxHomies);
+  if (!Number.isFinite(maxHomies) || maxHomies < 1) {
+    const sid = await sendSms(user.phone_number, "How many homies should I invite? (number >= 1)");
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: "How many homies should I invite? (number >= 1)",
+        twilio_sid: sid,
+        attributes: { needs: "max_homies" },
+      },
+    });
+    await prisma.conversation.update({
+      where: { conversation_id: _ctx.conversationId },
+      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+    });
+    return;
+  }
+
+  // If we have fewer onboarded homies than needed, cap to what's available.
+  if (maxHomies > homies.length) {
+    logger.info("Capping max_participants because not enough homies onboarded", {
+      requestedMaxHomies: maxHomies,
+      availableHomies: homies.length,
+    });
+    maxHomies = homies.length;
+  }
+
+  if (preferredNames.length > maxHomies) {
+    // Normally we treat listing more names than capacity as an error.
+    // BUT for Priority Invite, the user can name a priority list larger than n.
+    if (policyHint !== "prioritized") {
+      const askTooMany = `You listed ${preferredNames.length} homies, but you asked me to invite only ${maxHomies}. Who should I include?`;
+      const sid = await sendSms(user.phone_number, askTooMany);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: askTooMany,
+          twilio_sid: sid,
+          attributes: { needs: "homie_names", preferredNames, maxHomies },
+        },
+      });
+      await prisma.conversation.update({
+        where: { conversation_id: _ctx.conversationId },
+        data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+      });
+      return;
+    }
+  }
+
+  // Resolve preferred names -> members (explicit list only).
+  // For Priority Invite, the user may list more preferred homies than capacity.
+  // We still need to resolve those names to Members, so allow the resolution step to exceed n.
+  const maxHomiesForPreferredResolution =
+    policyHint === "prioritized"
+      ? Math.max(maxHomies, preferredNames.length)
+      : maxHomies;
+
+  const explicitResolution = resolveExplicitHomiesForEvent({
+    allMembers: homies,
+    preferredNames,
+    maxHomies: maxHomiesForPreferredResolution,
+  });
+
+  if (!explicitResolution.ok) {
+    const sid = await sendSms(user.phone_number, explicitResolution.reason);
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: explicitResolution.reason,
+        twilio_sid: sid,
+      },
+    });
+    await prisma.conversation.update({
+      where: { conversation_id: _ctx.conversationId },
+      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+    });
+    return;
+  }
+
+  const preferredMembers = explicitResolution.preferredMembers;
+  const preferredNamesForSms = preferredMembers.map(fullNameForMember);
+
+  const invitePolicy = deriveInvitePolicy({
+    preferredCount: preferredMembers.length,
+    maxHomies,
+  });
+
+  if (policyHint && policyHint !== invitePolicy) {
+    const askPolicy = `Quick check — do you want ${brandedInvitePolicyName(policyHint)}, or ${brandedInvitePolicyName(invitePolicy)}?`;
+    const sid = await sendSms(user.phone_number, askPolicy);
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: askPolicy,
+        twilio_sid: sid,
         attributes: {
-          llm: {
-            provider: "openai",
-            model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
-          },
+          needs: "invite_policy_confirmation",
+          policyHint,
+          inferredPolicy: invitePolicy,
+          maxHomies,
+          preferredNames: preferredNamesForSms,
         },
       },
     });
+    await prisma.conversation.update({
+      where: { conversation_id: _ctx.conversationId },
+      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+    });
+    return;
   }
+
+  // Defensive: exact-list must match capacity.
+  if (invitePolicy === "exact" && preferredMembers.length !== maxHomies) {
+    const askExact = `Just to confirm — do you want to invite exactly ${preferredMembers.length} homies, or invite ${maxHomies}?`;
+    const sid = await sendSms(user.phone_number, askExact);
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: askExact,
+        twilio_sid: sid,
+        attributes: { preferredNames: preferredNamesForSms, maxHomies },
+      },
+    });
+    await prisma.conversation.update({
+      where: { conversation_id: _ctx.conversationId },
+      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+    });
+    return;
+  }
+
+  // Validate start/end.
+  const startDt = DateTime.fromISO(startIso, { setZone: true });
+  const endDt = DateTime.fromISO(endIso, { setZone: true });
+  if (!startDt.isValid || !endDt.isValid) {
+    const askTime = "I couldn’t confirm the time. What exact start + end time should I use?";
+    const sid = await sendSms(user.phone_number, askTime);
+    await prisma.conversationMessage.create({
+      data: {
+        conversation_id: _ctx.conversationId,
+        role: "assistant",
+        direction: "outbound",
+        content: askTime,
+        twilio_sid: sid,
+        attributes: { needs: "event_time", reason: "invalid_iso_in_draft" },
+      },
+    });
+    await prisma.conversation.update({
+      where: { conversation_id: _ctx.conversationId },
+      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+    });
+    return;
+  }
+
+  // Lock the invite plan at preview-time so names don't reshuffle at confirmation.
+  const plan = buildInvitePlan({
+    invitePolicy,
+    maxHomies,
+    allMembers: homies,
+    preferredMembers,
+  });
+
+  const previewWithPlan = buildEventDraftPreviewSms({
+    activityName: activity.name,
+    location: nextDraft.location!,
+    start: startDt.toJSDate(),
+    end: endDt.toJSDate(),
+    timeZone: user.timezone,
+    preferredNames: preferredNamesForSms,
+    maxHomies,
+    inviteMessage: nextDraft.inviteMessage,
+    invitePolicy,
+    immediateNames: plan.immediate.map(fullNameForMember),
+    followUpNames: plan.followUp.map(fullNameForMember),
+  });
+
+  const sid = await sendSms(user.phone_number, previewWithPlan);
+  await prisma.conversationMessage.create({
+    data: {
+      conversation_id: _ctx.conversationId,
+      role: "assistant",
+      direction: "outbound",
+      content: previewWithPlan,
+      twilio_sid: sid,
+      attributes: { needs: "event_confirmation" },
+    },
+  });
+
+  const nextState = {
+    ...(state as unknown as Prisma.JsonObject),
+  } as Prisma.JsonObject;
+
+  nextState.pendingEvent = {
+    status: "awaiting_confirmation",
+    draft: {
+      activityId: activity.activity_id,
+      location: nextDraft.location!,
+      startIso,
+      endIso,
+      maxHomies,
+      invitePolicy,
+      preferredMemberIds: preferredMembers.map((m) => m.member_id),
+      preferredNamesForSms,
+      immediateMemberIds: plan.immediate.map((m) => m.member_id),
+      followUpMemberIds: plan.followUp.map((m) => m.member_id),
+      immediateNamesForSms: plan.immediate.map(fullNameForMember),
+      followUpNamesForSms: plan.followUp.map(fullNameForMember),
+      excludedMemberIds: [],
+      excludedNamesForSms: [],
+      inviteMessage: nextDraft.inviteMessage,
+      previewSms: previewWithPlan,
+      previewSentAtIso: updatedAtIso,
+    },
+  };
+
+  delete (nextState as any).activeDraft;
+
+  await prisma.conversation.update({
+    where: { conversation_id: _ctx.conversationId },
+    data: { state: nextState as unknown as Prisma.InputJsonValue },
+  });
+
+  return;
 }

@@ -8,6 +8,12 @@ export type PendingEventDraft = {
   startIso: string;
   endIso: string;
 
+  /**
+   * If true, the user edited the start time without providing an updated end/duration.
+   * We should ask for end/duration before allowing confirmation.
+   */
+  needsEndTime?: boolean;
+
   /** Max number of homies to invite (does NOT include the user). */
   maxHomies: number;
   invitePolicy: EventInvitePolicy;
@@ -54,6 +60,54 @@ export type PendingEvent = {
   draft: PendingEventDraft;
 };
 
+/**
+ * Short-lived state for the current planning session.
+ *
+ * This is intentionally separate from durable memory (`memorySummary`) and from
+ * `pendingEvent` (which is the locked preview awaiting confirmation).
+ */
+export type ActiveEventDraft = {
+  status: "collecting_details";
+
+  /** Used mainly for display and for safer event creation. */
+  activityId: string;
+
+  /**
+   * Location text exactly as the user described it (best-effort).
+   *
+   * NOTE: we store this explicitly so the assistant doesn't re-ask after the
+   * message falls out of the last-N history window.
+   */
+  location?: string;
+
+  /**
+   * Event start/end in ISO-8601 including explicit offset.
+   *
+   * endIso is optional until explicitly provided; we should ask the user for
+   * end/duration if missing.
+   */
+  startIso?: string;
+  endIso?: string;
+
+  /** Optional extracted duration (minutes). */
+  durationMinutes?: number;
+
+  /**
+   * Names the user explicitly asked to invite (if any), in the order they were specified.
+   * These are strings (not ids) because we may not have enough info to resolve to ids yet.
+   */
+  preferredNames?: string[];
+
+  /** Max number of homies to invite (does NOT include the user). */
+  maxHomies?: number;
+
+  /** Optional note/instruction to share with invited members. */
+  inviteMessage?: string | null;
+
+  /** Timestamp for debugging / potential expiry. */
+  updatedAtIso: string;
+};
+
 export type ConversationState = {
   /**
    * Compact, durable memory used across multiple event-planning “sessions”.
@@ -74,6 +128,9 @@ export type ConversationState = {
 
   /** New: when we have a complete draft but we're waiting for the user to confirm it. */
   pendingEvent?: PendingEvent;
+
+  /** New: draft details being collected for the current planning session. */
+  activeDraft?: ActiveEventDraft;
 };
 
 export function asConversationState(

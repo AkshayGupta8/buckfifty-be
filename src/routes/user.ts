@@ -218,29 +218,40 @@ router.post(
       const firstName = (user.first_name ?? "").trim();
       const greeting = firstName.length ? `Hi ${firstName}!` : "Hi!";
       const activityName = (activity?.name ?? "").trim();
-      const activityPhrase = activityName.length ? activityName : "your activity";
+      const activityPhrase = activityName.length
+        ? activityName
+        : "your activity";
 
       const messageBody = [
         `${greeting} I’m Buckfifty, your AI assistant.`,
         "",
         `I help you coordinate ${activityPhrase} plans with your homies — lock in a time + place, send invites, and track replies.`,
         "",
-        buildInvitePolicyExplainerLines(),
-        "",
         "Save Buckfifty to your contacts so you can text anytime.",
       ].join("\n");
       const messageSid = await sendMms(
         user.phone_number,
         messageBody,
-        mediaUrl
+        mediaUrl,
       );
 
-      res.json({ message: "Contact Card sent", messageSid, mediaUrl });
+      const messageSid2 = await sendMms(
+        user.phone_number,
+        buildInvitePolicyExplainerLines(),
+        mediaUrl,
+      );
+
+      res.json({
+        message: "Contact Card sent and invite policies explained",
+        messageSid,
+        messageSid2,
+        mediaUrl,
+      });
     } catch (error) {
       logger.error("user.share_contact_card.failed", { error });
       res.status(500).json({ error: "Failed to send contact card" });
     }
-  }
+  },
 );
 
 export default router;

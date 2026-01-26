@@ -59,11 +59,11 @@ export function buildEventConfirmationSms(args: {
   const when = isSameLocalDay(args.start, args.end, args.timeZone)
     ? `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
         args.start,
-        args.timeZone
+        args.timeZone,
       )} - ${formatTimeForSms(args.end, args.timeZone)}`
     : `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
         args.start,
-        args.timeZone
+        args.timeZone,
       )} - ${formatDayForSms(args.end, args.timeZone)} ${formatTimeForSms(args.end, args.timeZone)}`;
 
   const desiredHomieCount = Math.max(0, Math.trunc(args.maxHomies));
@@ -114,21 +114,27 @@ export function buildEventDraftPreviewSms(args: {
   const when = isSameLocalDay(args.start, args.end, args.timeZone)
     ? `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
         args.start,
-        args.timeZone
+        args.timeZone,
       )} - ${formatTimeForSms(args.end, args.timeZone)}`
     : `${formatDayForSms(args.start, args.timeZone)} ${formatTimeForSms(
         args.start,
-        args.timeZone
+        args.timeZone,
       )} - ${formatDayForSms(args.end, args.timeZone)} ${formatTimeForSms(
         args.end,
-        args.timeZone
+        args.timeZone,
       )}`;
 
   const preferred = args.preferredNames.filter((n) => n.trim().length > 0);
 
-  const immediate = (args.immediateNames ?? []).filter((n) => n.trim().length > 0);
-  const followUp = (args.followUpNames ?? []).filter((n) => n.trim().length > 0);
-  const excluded = (args.excludedNames ?? []).filter((n) => n.trim().length > 0);
+  const immediate = (args.immediateNames ?? []).filter(
+    (n) => n.trim().length > 0,
+  );
+  const followUp = (args.followUpNames ?? []).filter(
+    (n) => n.trim().length > 0,
+  );
+  const excluded = (args.excludedNames ?? []).filter(
+    (n) => n.trim().length > 0,
+  );
 
   // If we have a locked plan, show the requested two-line output.
   // Otherwise fall back to legacy "X + others" preview.
@@ -141,7 +147,9 @@ export function buildEventDraftPreviewSms(args: {
         ? "Backup invites (if needed): (none — only these homies will be invited)"
         : `Backup invites (if needed): ${followUp.length ? followUp.join(", ") : "(none)"}`;
 
-    const excludedLine = excluded.length ? `\nExcluded: ${excluded.join(", ")}` : "";
+    const excludedLine = excluded.length
+      ? `\nExcluded: ${excluded.join(", ")}`
+      : "";
     whoLines = `${immediateLine}\n${backupLine}${excludedLine}`;
   } else {
     const desiredHomieCount = Math.max(0, Math.trunc(args.maxHomies));
@@ -163,5 +171,5 @@ export function buildEventDraftPreviewSms(args: {
     ? `\nInvite policy: ${brandedInvitePolicyName(args.invitePolicy)}`
     : "";
 
-  return `Draft: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${whoLines}${noteLine}${policyLine}\n\nReply with edits, or say “looks good”.`;
+  return `Draft: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${whoLines}${noteLine}${policyLine}\n\nReply with edits, say “looks good”, or say “scratch”`;
 }

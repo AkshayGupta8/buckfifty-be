@@ -2,17 +2,20 @@ import { chat, type ChatMessage } from "../../utils/openAiClient";
 import logger from "../../utils/logger";
 import { parseJsonFromLLMText } from "../llm/llmJson";
 
-export type EventConfirmationDecision = "confirm" | "edit" | "unknown";
+export type EventConfirmationDecision = "confirm" | "edit" | "cancel" | "unknown";
 
 export function buildEventConfirmationAnalyzerSystemPrompt(): string {
   return `You are an assistant that determines whether the user is confirming a draft event, or requesting changes.
 
 Return ONLY JSON:
-{ "decision": "confirm"|"edit"|"unknown", "reason": "short reason" }
+{ "decision": "confirm"|"edit"|"cancel"|"unknown", "reason": "short reason" }
 
 How to decide:
 - "confirm" when the user expresses approval with no requested changes.
   Examples: "looks good", "perfect", "sounds right", "do it", "book it", "send it", "go ahead".
+
+- "cancel" when the user wants to abandon this scheduling flow / discard the draft.
+  Examples: "scratch", "scratch that", "scrap that", "nevermind", "never mind", "nvm", "forget it".
 
 - "edit" when the user is NOT confirming OR they request any change.
   Examples:
@@ -46,7 +49,9 @@ export async function analyzeEventConfirmation(args: {
 
     const decisionRaw = typeof parsed.decision === "string" ? parsed.decision : "unknown";
     const decision: EventConfirmationDecision =
-      decisionRaw === "confirm" || decisionRaw === "edit" ? decisionRaw : "unknown";
+      decisionRaw === "confirm" || decisionRaw === "edit" || decisionRaw === "cancel"
+        ? decisionRaw
+        : "unknown";
 
     const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
 

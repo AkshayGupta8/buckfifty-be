@@ -129,6 +129,9 @@ model EventMember {
   /** Whether this invite has timed out (defaults false). */
   invite_timed_out Boolean @default(false)
 
+  /** Whether a reminder SMS has been sent for this event member (defaults false). */
+  reminder_sent Boolean @default(false)
+
   /** 1-based priority order for explicitly listed homies (optional). */
   priority_rank Int?
 

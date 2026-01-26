@@ -161,6 +161,8 @@ export async function inviteEventMember(args: {
       invite_expires_at: expiresAt.toJSDate(),
       // Defensive: if we are (re)inviting, clear any previous timeout.
       invite_timed_out: false,
+      // NOTE: Strict policy: reminders are sent at most once per (event_id,member_id) row.
+      // We intentionally do NOT reset reminder_sent here.
     },
   });
 

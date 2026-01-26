@@ -6,7 +6,11 @@ function pick<T>(arr: readonly T[]): T {
 }
 
 function compactSms(s: string, maxLen = 600): string {
-  return (s ?? "").replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n").trim().slice(0, maxLen);
+  return (s ?? "")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n\s+/g, "\n")
+    .trim()
+    .slice(0, maxLen);
 }
 
 export function buildMemberInviteSms(args: {
@@ -35,7 +39,7 @@ export function buildMemberInviteSms(args: {
   });
 
   const when = `${dayFmt.format(args.timeSlot.start_time)} ${timeFmt.format(
-    args.timeSlot.start_time
+    args.timeSlot.start_time,
   )} - ${timeFmt.format(args.timeSlot.end_time)}`;
 
   const what = (args.activityName ?? "hang")?.trim() || "hang";
@@ -68,11 +72,82 @@ export function buildMemberInviteSms(args: {
   const rsvp = pick([
     "Can you make it?",
     "Are you able to make it?",
-    "Are you in? Reply YES or NO.",
-    "Can you come? Reply YES or NO.",
+    "Are you in?",
+    "Can you come?",
   ]);
 
   const sms = `${hello} ${intro}\n${inviteLine}\nWhen: ${when}\nWhere: ${where}${noteLine}\n${rsvp}`;
+  return compactSms(sms);
+}
+
+function formatInviteWhen(args: {
+  timeSlot: TimeSlot;
+  timeZone: string;
+}): string {
+  const dayFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: args.timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+
+  const timeFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: args.timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  return `${dayFmt.format(args.timeSlot.start_time)} ${timeFmt.format(
+    args.timeSlot.start_time,
+  )} - ${timeFmt.format(args.timeSlot.end_time)}`;
+}
+
+function formatInviteDeadline(args: {
+  deadline: Date;
+  timeZone: string;
+}): string {
+  // Example: "Mon, Jan 26 3:00 PM" (timezone implied by timeZone)
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: args.timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return fmt.format(args.deadline);
+}
+
+export function buildMemberInviteReminderSms(args: {
+  member: Member;
+  event: Event;
+  timeSlot: TimeSlot;
+  activityName?: string | null;
+  creatorFirstName: string;
+  timeZone: string;
+  inviteExpiresAt: Date;
+}): string {
+  const note = (args.event.invite_message ?? "").trim();
+  const what = (args.activityName ?? "hang")?.trim() || "hang";
+  const where = (args.event.location ?? "").trim() || "(location TBD)";
+
+  const when = formatInviteWhen({
+    timeSlot: args.timeSlot,
+    timeZone: args.timeZone,
+  });
+  const deadline = formatInviteDeadline({
+    deadline: args.inviteExpiresAt,
+    timeZone: args.timeZone,
+  });
+
+  const noteLine = note.length ? `\nNote: ${note}` : "";
+
+  const firstName = args.member.first_name.trim();
+  const hello = firstName.length
+    ? pick([`Hey ${firstName} —`, `Hi ${firstName} —`])
+    : "Hey —";
+
+  const sms = `${hello} quick reminder from BuckFifty for ${args.creatorFirstName}.\n${what}\nWhen: ${when}\nWhere: ${where}${noteLine}\n\nYour spot is currently yours if you want it, but at ${deadline} I’m going to start inviting others.`;
   return compactSms(sms);
 }
 
@@ -80,7 +155,7 @@ export function buildAmbiguousInviteReplySms(): string {
   return pick([
     "Just to confirm — can you make it?",
     "Quick check — are you able to make it?",
-    "Sorry, didn’t catch that — can you make it? Reply YES or NO.",
+    "Sorry, didn’t catch that — can you make it?",
   ]);
 }
 

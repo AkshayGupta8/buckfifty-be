@@ -44,7 +44,11 @@ export function buildMemberEventQuestionSystemPrompt(args: {
   const where = (args.location ?? "").trim() || "(location TBD)";
   const note = (args.inviteMessage ?? "").trim();
   const noteLine = note.length ? `Note: ${note}` : "(no note)";
-  const when = formatWhenForSms({ start: args.start, end: args.end, timeZone: args.timeZone });
+  const when = formatWhenForSms({
+    start: args.start,
+    end: args.end,
+    timeZone: args.timeZone,
+  });
 
   const statusLine = `EventMember status: ${args.memberStatus}`;
 
@@ -64,7 +68,7 @@ Your job:
 - Do NOT invent details. If you don't know, say so.
 
 Decision prompt:
-- If status is invited, end with a gentle question: "Can you make it? Reply YES or NO."
+- If status is invited, end with a gentle question: "Can you make it?"
 - If status is accepted, do NOT ask them to RSVP again; you can ask logistics questions instead.
 - If status is declined, do NOT pressure; you can still answer questions politely.
 `;

@@ -15,6 +15,7 @@ import timeSlotRouter from "./routes/timeSlot";
 import conversationRouter from "./routes/conversation";
 import twilioRouter from "./routes/twilio";
 import { startInviteTimeoutPoller } from "./conversationTwilio/pollers/inviteTimeoutPoller";
+import { startInviteReminderPoller } from "./conversationTwilio/pollers/inviteReminderPoller";
 
 const app = express();
 const prisma = new PrismaClient();
@@ -110,5 +111,16 @@ app.listen(port, () => {
     const intervalMs = Number.isFinite(intervalMsParsed) ? intervalMsParsed : 60_000;
 
     startInviteTimeoutPoller({ intervalMs });
+  }
+
+  // Background poller: sends one reminder SMS for invited members when their invite is nearing expiry.
+  // Strict policy: `reminder_sent` is set once per (event,member) row ever.
+  // Kill switch: set INVITE_REMINDER_POLLER=0 to disable.
+  if (process.env.INVITE_REMINDER_POLLER !== "0") {
+    const intervalMsRaw = process.env.INVITE_REMINDER_POLLER_INTERVAL_MS;
+    const intervalMsParsed = intervalMsRaw ? Number(intervalMsRaw) : NaN;
+    const intervalMs = Number.isFinite(intervalMsParsed) ? intervalMsParsed : 60_000;
+
+    startInviteReminderPoller({ intervalMs });
   }
 });

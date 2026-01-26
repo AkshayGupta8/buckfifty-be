@@ -25,12 +25,8 @@ import {
   fullNameForMember,
   resolveExplicitHomiesForEvent,
 } from "./domain/homies";
-import {
-  brandedInvitePolicyName,
-} from "./domain/inviteBranding";
-import {
-  buildEventDraftPreviewSms,
-} from "./domain/smsFormatting";
+import { brandedInvitePolicyName } from "./domain/inviteBranding";
+import { buildEventDraftPreviewSms } from "./domain/smsFormatting";
 import { buildSchedulerHowItWorksSms } from "./domain/helpFormatting";
 import { summarizeConversationMemory } from "./memory/summarizeConversationMemory";
 import {
@@ -123,7 +119,7 @@ function buildInvitePlan(args: {
     const immediateIds = new Set(immediate.map((m) => m.member_id));
     // Follow-up should be randomized so it reflects the order we’ll likely invite next.
     const followUp = shuffleInPlace(
-      all.filter((m) => !immediateIds.has(m.member_id))
+      all.filter((m) => !immediateIds.has(m.member_id)),
     );
 
     return { immediate, followUp };
@@ -141,16 +137,22 @@ function resolveMembersById(args: {
   ids: string[];
 }): Prisma.MemberGetPayload<{}>[] {
   const byId = new Map(args.allMembers.map((m) => [m.member_id, m] as const));
-  return (args.ids ?? []).map((id) => byId.get(id)).filter(Boolean) as Prisma.MemberGetPayload<{}>[];
+  return (args.ids ?? [])
+    .map((id) => byId.get(id))
+    .filter(Boolean) as Prisma.MemberGetPayload<{}>[];
 }
 
-function buildAllowedHomiesListForPrompt(homies: Prisma.MemberGetPayload<{}>[]): string {
+function buildAllowedHomiesListForPrompt(
+  homies: Prisma.MemberGetPayload<{}>[],
+): string {
   const names = homies
     .map((h) => fullNameForMember(h))
     .map((n) => n.trim())
     .filter((n) => n.length > 0);
 
-  return names.length ? names.map((n) => `- ${n}`).join("\n") : "(no homies yet)";
+  return names.length
+    ? names.map((n) => `- ${n}`).join("\n")
+    : "(no homies yet)";
 }
 
 function buildLockedInInvitePlanSms(args: {
@@ -198,10 +200,10 @@ function buildLockedInInvitePlanSms(args: {
 
   const when = sameDay
     ? `${dayFmt.format(args.start)} ${timeFmt.format(args.start)} - ${timeFmt.format(
-        args.end
+        args.end,
       )}`
     : `${dayFmt.format(args.start)} ${timeFmt.format(
-        args.start
+        args.start,
       )} - ${dayFmt.format(args.end)} ${timeFmt.format(args.end)}`;
 
   const note = (args.inviteMessage ?? "").trim();
@@ -216,7 +218,7 @@ function buildLockedInInvitePlanSms(args: {
 
   let backupLine: string;
   if (args.invitePolicy === "exact") {
-    backupLine = "Backup invites (if needed): (none — only these homies will be invited)";
+    backupLine = "Backup invites: (none)";
   } else {
     backupLine = `Backup invites (if needed): ${
       followUp.length ? followUp.join(", ") : "(none)"
@@ -236,11 +238,13 @@ function deriveInvitePolicy(args: {
   return "prioritized";
 }
 
-async function detectInvitePolicyHintFromMessages(messages: ChatMessage[]): Promise<
-  "max_only" | "prioritized" | "exact" | null
-> {
+async function detectInvitePolicyHintFromMessages(
+  messages: ChatMessage[],
+): Promise<"max_only" | "prioritized" | "exact" | null> {
   // Look at the recent user text only.
-  const recentUserMessages = messages.filter((m) => m.role === "user").slice(-5);
+  const recentUserMessages = messages
+    .filter((m) => m.role === "user")
+    .slice(-5);
   const systemPrompt = buildInvitePolicyIntentAnalyzerSystemPrompt();
   const { intent } = await analyzeInvitePolicyIntent({
     systemPrompt,
@@ -259,7 +263,7 @@ const prisma = new PrismaClient();
  * an inbound Twilio message.
  */
 export async function onInboundTwilioMessage(
-  _ctx: InboundTwilioMessageContext
+  _ctx: InboundTwilioMessageContext,
 ): Promise<void> {
   logger.info("Inbound Twilio message", {
     userId: _ctx.userId,
@@ -404,7 +408,7 @@ export async function onInboundTwilioMessage(
 
   if (!conversation) {
     throw new Error(
-      `No conversation found for conversationId=${_ctx.conversationId}`
+      `No conversation found for conversationId=${_ctx.conversationId}`,
     );
   }
 
@@ -497,7 +501,8 @@ export async function onInboundTwilioMessage(
     });
 
     if (decision.decision === "cancel") {
-      const sms = "No problem — I scratched that draft. Text me anytime to start a new one.";
+      const sms =
+        "No problem — I scratched that draft. Text me anytime to start a new one.";
       const sid = await sendSms(user.phone_number, sms);
       await prisma.conversationMessage.create({
         data: {
@@ -534,7 +539,8 @@ export async function onInboundTwilioMessage(
       // If we somehow reached confirmation without complete time details, ask to fix.
       // (Should be rare; kept defensive.)
       if (!d.startIso || !d.endIso) {
-        const ask = "I’m missing the exact end time. What end time (or duration) should I use?";
+        const ask =
+          "I’m missing the exact end time. What end time (or duration) should I use?";
         const sid = await sendSms(user.phone_number, ask);
         await prisma.conversationMessage.create({
           data: {
@@ -553,14 +559,20 @@ export async function onInboundTwilioMessage(
       }
 
       const preferredMembersForPlan = homies.filter((m) =>
-        d.preferredMemberIds.includes(m.member_id)
+        d.preferredMemberIds.includes(m.member_id),
       );
 
       // Use locked invite plan from preview-time to prevent reshuffles.
       const immediateIds = d.immediateMemberIds ?? [];
       const followUpIds = d.followUpMemberIds ?? [];
-      const immediateMembers = resolveMembersById({ allMembers: homies, ids: immediateIds });
-      const followUpMembers = resolveMembersById({ allMembers: homies, ids: followUpIds });
+      const immediateMembers = resolveMembersById({
+        allMembers: homies,
+        ids: immediateIds,
+      });
+      const followUpMembers = resolveMembersById({
+        allMembers: homies,
+        ids: followUpIds,
+      });
 
       const createdEvent = await prisma.$transaction(async (tx) => {
         const event = await tx.event.create({
@@ -590,11 +602,16 @@ export async function onInboundTwilioMessage(
         //   inviting-now order first, then backup order.
         const orderedIds = uniqueById(
           [...(d.immediateMemberIds ?? []), ...(d.followUpMemberIds ?? [])]
-            .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-            .map((id) => ({ member_id: id }))
+            .filter(
+              (id): id is string =>
+                typeof id === "string" && id.trim().length > 0,
+            )
+            .map((id) => ({ member_id: id })),
         ).map((x) => x.member_id);
 
-        const rankById = new Map(orderedIds.map((id, idx) => [id, idx + 1] as const));
+        const rankById = new Map(
+          orderedIds.map((id, idx) => [id, idx + 1] as const),
+        );
 
         const rows: {
           event_id: string;
@@ -603,7 +620,9 @@ export async function onInboundTwilioMessage(
           priority_rank?: number;
         }[] = [];
 
-        const immediateIdSet = new Set(immediateMembers.map((m) => m.member_id));
+        const immediateIdSet = new Set(
+          immediateMembers.map((m) => m.member_id),
+        );
         const followUpIdSet = new Set(followUpMembers.map((m) => m.member_id));
 
         // For exact, only persist preferred (immediate). For others, persist all homies.
@@ -654,8 +673,10 @@ export async function onInboundTwilioMessage(
         invitePolicy: d.invitePolicy,
         maxHomies: d.maxHomies,
         inviteMessage: d.inviteMessage,
-        immediateNames: (d.immediateNamesForSms ?? immediateMembers.map(fullNameForMember)),
-        followUpNames: (d.followUpNamesForSms ?? followUpMembers.map(fullNameForMember)),
+        immediateNames:
+          d.immediateNamesForSms ?? immediateMembers.map(fullNameForMember),
+        followUpNames:
+          d.followUpNamesForSms ?? followUpMembers.map(fullNameForMember),
       });
 
       const sid = await sendSms(user.phone_number, confirmation);
@@ -677,7 +698,9 @@ export async function onInboundTwilioMessage(
         try {
           await onEventCreated(createdEvent.event_id);
         } catch (err: any) {
-          logger.error(`coordinator:onEventCreated failed: ${err?.message ?? err}`);
+          logger.error(
+            `coordinator:onEventCreated failed: ${err?.message ?? err}`,
+          );
         }
       });
 
@@ -731,19 +754,23 @@ export async function onInboundTwilioMessage(
 
       const locRes = await analyzeConversationLocation(
         [{ role: "user", content: _ctx.body }],
-        buildLocationAnalyzerSystemPrompt()
+        buildLocationAnalyzerSystemPrompt(),
       );
 
       const inviteMsgRes = await analyzeConversationInviteMessage(
         [{ role: "user", content: _ctx.body }],
-        buildInviteMessageAnalyzerSystemPrompt()
+        buildInviteMessageAnalyzerSystemPrompt(),
       );
 
       // Copy draft so we can mutate.
       const d = { ...d0 };
 
       // Location edit
-      if (locRes.eventLocationProvided && typeof locRes.eventLocation === "string" && locRes.eventLocation.trim()) {
+      if (
+        locRes.eventLocationProvided &&
+        typeof locRes.eventLocation === "string" &&
+        locRes.eventLocation.trim()
+      ) {
         d.location = locRes.eventLocation.trim();
       }
 
@@ -755,7 +782,10 @@ export async function onInboundTwilioMessage(
       // Time edit
       if (timePatchRes.ok) {
         const p = timePatchRes.patch;
-        const startChanged = typeof p.startIso === "string" && p.startIso.trim().length > 0 && p.startIso !== d.startIso;
+        const startChanged =
+          typeof p.startIso === "string" &&
+          p.startIso.trim().length > 0 &&
+          p.startIso !== d.startIso;
 
         if (p.startIso) d.startIso = p.startIso;
 
@@ -766,7 +796,10 @@ export async function onInboundTwilioMessage(
           const startDt = DateTime.fromISO(d.startIso, { setZone: true });
           if (startDt.isValid) {
             const endDt = startDt.plus({ minutes: p.durationMinutes });
-            d.endIso = endDt.toISO({ suppressMilliseconds: true }) ?? endDt.toISO() ?? d.endIso;
+            d.endIso =
+              endDt.toISO({ suppressMilliseconds: true }) ??
+              endDt.toISO() ??
+              d.endIso;
           }
         } else if (startChanged) {
           // If user changed the start but didn't provide an updated end/duration,
@@ -819,9 +852,18 @@ export async function onInboundTwilioMessage(
       const followUpIds = d.followUpMemberIds ?? [];
       const excludedIds = d.excludedMemberIds ?? [];
 
-      const immediateMembers = resolveMembersById({ allMembers: homies, ids: immediateIds });
-      const followUpMembers = resolveMembersById({ allMembers: homies, ids: followUpIds });
-      const excludedMembers = resolveMembersById({ allMembers: homies, ids: excludedIds });
+      const immediateMembers = resolveMembersById({
+        allMembers: homies,
+        ids: immediateIds,
+      });
+      const followUpMembers = resolveMembersById({
+        allMembers: homies,
+        ids: followUpIds,
+      });
+      const excludedMembers = resolveMembersById({
+        allMembers: homies,
+        ids: excludedIds,
+      });
 
       const systemPrompt = buildEventDraftEditAnalyzerSystemPrompt({
         allowedHomiesList: buildAllowedHomiesListForPrompt(homies),
@@ -853,7 +895,11 @@ export async function onInboundTwilioMessage(
       });
 
       if (!patched.ok) {
-        const ask = `${patched.reason}.\nReply with a homie name from your list.`.slice(0, 300);
+        const ask =
+          `${patched.reason}.\nReply with a homie name from your list.`.slice(
+            0,
+            300,
+          );
         const sid = await sendSms(user.phone_number, ask);
         await prisma.conversationMessage.create({
           data: {
@@ -874,13 +920,14 @@ export async function onInboundTwilioMessage(
       // Apply invite-policy edits during confirmation.
       // LLM-based so the user can say things like "hand picked", "no backups", etc.
       const policySystemPrompt = buildInvitePolicyIntentAnalyzerSystemPrompt();
-      const { intent: policyIntent, rawText: policyRawText } = await analyzeInvitePolicyIntent({
-        systemPrompt: policySystemPrompt,
-        messages: [
-          { role: "assistant", content: d.previewSms },
-          { role: "user", content: _ctx.body ?? "" },
-        ],
-      });
+      const { intent: policyIntent, rawText: policyRawText } =
+        await analyzeInvitePolicyIntent({
+          systemPrompt: policySystemPrompt,
+          messages: [
+            { role: "assistant", content: d.previewSms },
+            { role: "user", content: _ctx.body ?? "" },
+          ],
+        });
 
       logger.info("invitePolicyIntent.confirmation", {
         intent: policyIntent,
@@ -907,9 +954,11 @@ export async function onInboundTwilioMessage(
 
       // If we're now exact, force follow-ups empty (no backups).
       const finalImmediateIds = patched.plan.immediateMemberIds;
-      const finalFollowUpIds = d.invitePolicy === "exact" ? [] : patched.plan.followUpMemberIds;
+      const finalFollowUpIds =
+        d.invitePolicy === "exact" ? [] : patched.plan.followUpMemberIds;
       const finalImmediateNames = patched.immediateNames;
-      const finalFollowUpNames = d.invitePolicy === "exact" ? [] : patched.followUpNames;
+      const finalFollowUpNames =
+        d.invitePolicy === "exact" ? [] : patched.followUpNames;
       const finalExcludedIds = patched.plan.excludedMemberIds;
       const finalExcludedNames = patched.excludedNames;
 
@@ -998,8 +1047,11 @@ export async function onInboundTwilioMessage(
   const userOnlyMessages = messages.filter((m) => m.role === "user");
 
   const locationAnalyzerSystemPrompt = buildLocationAnalyzerSystemPrompt();
-  const homiesAnalyzerSystemPrompt = buildHomiesAnalyzerSystemPrompt({ homiesList });
-  const inviteMessageAnalyzerSystemPrompt = buildInviteMessageAnalyzerSystemPrompt();
+  const homiesAnalyzerSystemPrompt = buildHomiesAnalyzerSystemPrompt({
+    homiesList,
+  });
+  const inviteMessageAnalyzerSystemPrompt =
+    buildInviteMessageAnalyzerSystemPrompt();
 
   const updatedAtIso = new Date().toISOString();
 
@@ -1020,8 +1072,15 @@ export async function onInboundTwilioMessage(
   // Analyze conversation and merge into draft.
   const [loc, homiesRes, inviteMsgRes] = await Promise.all([
     analyzeConversationLocation(userOnlyMessages, locationAnalyzerSystemPrompt),
-    analyzeConversationHomies(userOnlyMessages, homiesAnalyzerSystemPrompt, homieNames),
-    analyzeConversationInviteMessage(userOnlyMessages, inviteMessageAnalyzerSystemPrompt),
+    analyzeConversationHomies(
+      userOnlyMessages,
+      homiesAnalyzerSystemPrompt,
+      homieNames,
+    ),
+    analyzeConversationInviteMessage(
+      userOnlyMessages,
+      inviteMessageAnalyzerSystemPrompt,
+    ),
   ]);
 
   // Time patch: latest message (with existing draft start/end seeded).
@@ -1034,13 +1093,17 @@ export async function onInboundTwilioMessage(
   const dur = parseDurationMinutes(bodyText);
   const rangeTod = parseTimeRangeOfDay(bodyText);
   const tod = parseSimpleTimeOfDay(bodyText);
-  const { isStart: mentionsStart, isEnd: mentionsEnd } = textMentionsStartOrEnd(bodyText);
+  const { isStart: mentionsStart, isEnd: mentionsEnd } =
+    textMentionsStartOrEnd(bodyText);
 
   const expectingEnd = Boolean(prevDraft.startIso) && !prevDraft.endIso;
   const expectingStart = !prevDraft.startIso;
 
   let timePatchRes:
-    | { ok: true; patch: { startIso?: string; endIso?: string; durationMinutes?: number } }
+    | {
+        ok: true;
+        patch: { startIso?: string; endIso?: string; durationMinutes?: number };
+      }
     | { ok: false; reason: string } = { ok: false, reason: "no_time_patch" };
 
   if (Number.isFinite(dur as any) && typeof dur === "number") {
@@ -1058,9 +1121,16 @@ export async function onInboundTwilioMessage(
             tod: rangeTod.start,
             dayOffset,
           })
-        : anchorTimeOfDayToNow({ userTimezone: user.timezone, now: nowInUserTz, tod: rangeTod.start });
+        : anchorTimeOfDayToNow({
+            userTimezone: user.timezone,
+            now: nowInUserTz,
+            tod: rangeTod.start,
+          });
 
-    let endAnchored = anchorTimeOfDayToReferenceDay({ reference: startAnchored, tod: rangeTod.end });
+    let endAnchored = anchorTimeOfDayToReferenceDay({
+      reference: startAnchored,
+      tod: rangeTod.end,
+    });
 
     // Overnight support: if end <= start, bump end to the next day.
     if (endAnchored <= startAnchored) {
@@ -1070,8 +1140,14 @@ export async function onInboundTwilioMessage(
     timePatchRes = {
       ok: true,
       patch: {
-        startIso: startAnchored.toISO({ suppressMilliseconds: true }) ?? startAnchored.toISO() ?? "",
-        endIso: endAnchored.toISO({ suppressMilliseconds: true }) ?? endAnchored.toISO() ?? "",
+        startIso:
+          startAnchored.toISO({ suppressMilliseconds: true }) ??
+          startAnchored.toISO() ??
+          "",
+        endIso:
+          endAnchored.toISO({ suppressMilliseconds: true }) ??
+          endAnchored.toISO() ??
+          "",
       },
     };
   } else if (tod && nowInUserTz.isValid) {
@@ -1097,17 +1173,26 @@ export async function onInboundTwilioMessage(
       const startRef = DateTime.fromISO(prevDraft.startIso, { setZone: true });
       anchored = startRef.isValid
         ? anchorTimeOfDayToReferenceDay({ reference: startRef, tod })
-        : anchorTimeOfDayToNow({ userTimezone: user.timezone, now: nowInUserTz, tod });
+        : anchorTimeOfDayToNow({
+            userTimezone: user.timezone,
+            now: nowInUserTz,
+            tod,
+          });
 
       // Overnight support: if end <= start, bump end to next day.
       if (startRef.isValid && anchored <= startRef) {
         anchored = anchored.plus({ days: 1 });
       }
     } else {
-      anchored = anchorTimeOfDayToNow({ userTimezone: user.timezone, now: nowInUserTz, tod });
+      anchored = anchorTimeOfDayToNow({
+        userTimezone: user.timezone,
+        now: nowInUserTz,
+        tod,
+      });
     }
 
-    const iso = anchored.toISO({ suppressMilliseconds: true }) ?? anchored.toISO() ?? "";
+    const iso =
+      anchored.toISO({ suppressMilliseconds: true }) ?? anchored.toISO() ?? "";
 
     if (treatAsEnd) {
       timePatchRes = { ok: true, patch: { endIso: iso } };
@@ -1134,7 +1219,11 @@ export async function onInboundTwilioMessage(
     updatedAtIso,
   };
 
-  if (loc.eventLocationProvided && typeof loc.eventLocation === "string" && loc.eventLocation.trim()) {
+  if (
+    loc.eventLocationProvided &&
+    typeof loc.eventLocation === "string" &&
+    loc.eventLocation.trim()
+  ) {
     nextDraft.location = loc.eventLocation.trim();
   }
 
@@ -1146,18 +1235,25 @@ export async function onInboundTwilioMessage(
     if (Array.isArray(homiesRes.homies) && homiesRes.homies.length > 0) {
       nextDraft.preferredNames = homiesRes.homies;
     }
-    if (typeof homiesRes.maxHomies === "number" && Number.isFinite(homiesRes.maxHomies)) {
+    if (
+      typeof homiesRes.maxHomies === "number" &&
+      Number.isFinite(homiesRes.maxHomies)
+    ) {
       nextDraft.maxHomies = Math.trunc(homiesRes.maxHomies);
     }
   }
 
   if (timePatchRes.ok) {
     const p = timePatchRes.patch;
-    const startChanged = typeof p.startIso === "string" && p.startIso.trim().length > 0 && p.startIso !== nextDraft.startIso;
+    const startChanged =
+      typeof p.startIso === "string" &&
+      p.startIso.trim().length > 0 &&
+      p.startIso !== nextDraft.startIso;
 
     if (p.startIso) nextDraft.startIso = p.startIso;
     if (p.endIso) nextDraft.endIso = p.endIso;
-    if (typeof p.durationMinutes === "number") nextDraft.durationMinutes = p.durationMinutes;
+    if (typeof p.durationMinutes === "number")
+      nextDraft.durationMinutes = p.durationMinutes;
 
     // If the user changed the start without giving an updated end/duration, invalidate end so we can ask.
     if (startChanged && !p.endIso && typeof p.durationMinutes !== "number") {
@@ -1173,7 +1269,10 @@ export async function onInboundTwilioMessage(
     const e = DateTime.fromISO(nextDraft.endIso, { setZone: true });
     if (s.isValid && e.isValid && e <= s) {
       const bumped = e.plus({ days: 1 });
-      nextDraft.endIso = bumped.toISO({ suppressMilliseconds: true }) ?? bumped.toISO() ?? nextDraft.endIso;
+      nextDraft.endIso =
+        bumped.toISO({ suppressMilliseconds: true }) ??
+        bumped.toISO() ??
+        nextDraft.endIso;
     }
   }
 
@@ -1187,18 +1286,32 @@ export async function onInboundTwilioMessage(
   });
 
   // Decide next action based on missing fields.
-  const hasLocation = Boolean(nextDraft.location && nextDraft.location.trim().length > 0);
-  const hasStart = Boolean(nextDraft.startIso && nextDraft.startIso.trim().length > 0);
-  const hasEnd = Boolean(nextDraft.endIso && nextDraft.endIso.trim().length > 0);
-  const hasDuration = typeof nextDraft.durationMinutes === "number" && nextDraft.durationMinutes > 0;
+  const hasLocation = Boolean(
+    nextDraft.location && nextDraft.location.trim().length > 0,
+  );
+  const hasStart = Boolean(
+    nextDraft.startIso && nextDraft.startIso.trim().length > 0,
+  );
+  const hasEnd = Boolean(
+    nextDraft.endIso && nextDraft.endIso.trim().length > 0,
+  );
+  const hasDuration =
+    typeof nextDraft.durationMinutes === "number" &&
+    nextDraft.durationMinutes > 0;
 
-  const hasPreferred = Array.isArray(nextDraft.preferredNames) && nextDraft.preferredNames.length > 0;
-  const hasMax = typeof nextDraft.maxHomies === "number" && Number.isFinite(nextDraft.maxHomies) && nextDraft.maxHomies > 0;
+  const hasPreferred =
+    Array.isArray(nextDraft.preferredNames) &&
+    nextDraft.preferredNames.length > 0;
+  const hasMax =
+    typeof nextDraft.maxHomies === "number" &&
+    Number.isFinite(nextDraft.maxHomies) &&
+    nextDraft.maxHomies > 0;
   const homiesProvided = hasPreferred || hasMax;
 
   // Ask for all missing details at once (less choppy).
   const missing: Array<{ key: string; prompt: string }> = [];
-  if (!hasLocation) missing.push({ key: "location", prompt: "Where should it be?" });
+  if (!hasLocation)
+    missing.push({ key: "location", prompt: "Where should it be?" });
   if (!hasStart) {
     // If we don't yet have a start time, ask for the full range up-front.
     // (This reads better and reduces back-and-forth.)
@@ -1208,17 +1321,24 @@ export async function onInboundTwilioMessage(
     });
   }
   if (hasStart && !hasEnd && !hasDuration) {
-    missing.push({ key: "end_time", prompt: "What end time should I use? (or how long?)" });
+    missing.push({
+      key: "end_time",
+      prompt: "What end time should I use? (or how long?)",
+    });
   }
 
   if (!homiesProvided) {
     if (policyHint === "exact") {
       missing.push({
         key: "homie_names",
-        prompt: "Handpicked Invite — who should I invite? Reply with the homies’ names.",
+        prompt:
+          "Handpicked Invite — who should I invite? Reply with the homies’ names.",
       });
     } else {
-      missing.push({ key: "max_homies", prompt: "How many homies should I invite?" });
+      missing.push({
+        key: "max_homies",
+        prompt: "How many homies should I invite?",
+      });
     }
   } else if (policyHint === "prioritized" && hasPreferred && !hasMax) {
     missing.push({
@@ -1304,7 +1424,10 @@ export async function onInboundTwilioMessage(
     const startDt = DateTime.fromISO(startIso, { setZone: true });
     if (startDt.isValid) {
       const endDt = startDt.plus({ minutes: nextDraft.durationMinutes! });
-      endIso = endDt.toISO({ suppressMilliseconds: true }) ?? endDt.toISO() ?? undefined;
+      endIso =
+        endDt.toISO({ suppressMilliseconds: true }) ??
+        endDt.toISO() ??
+        undefined;
     }
   }
 
@@ -1319,7 +1442,10 @@ export async function onInboundTwilioMessage(
         direction: "outbound",
         content: fallbackAsk,
         twilio_sid: sid,
-        attributes: { needs: "end_time", reason: "end_time_missing_after_gate" },
+        attributes: {
+          needs: "end_time",
+          reason: "end_time_missing_after_gate",
+        },
       },
     });
     await prisma.conversation.update({
@@ -1331,11 +1457,17 @@ export async function onInboundTwilioMessage(
 
   // max_participants is homies-only (does NOT include the user)
   const preferredNames = nextDraft.preferredNames ?? [];
-  let maxHomies = computeMaxParticipantsTotal(nextDraft.maxHomies ?? null, preferredNames.length ? preferredNames : null);
+  let maxHomies = computeMaxParticipantsTotal(
+    nextDraft.maxHomies ?? null,
+    preferredNames.length ? preferredNames : null,
+  );
 
   if (maxHomies === null) {
     // Should be unreachable due to gating, but keep defensive.
-    const sid = await sendSms(user.phone_number, "How many homies should I invite?");
+    const sid = await sendSms(
+      user.phone_number,
+      "How many homies should I invite?",
+    );
     await prisma.conversationMessage.create({
       data: {
         conversation_id: _ctx.conversationId,
@@ -1355,7 +1487,10 @@ export async function onInboundTwilioMessage(
 
   maxHomies = Math.trunc(maxHomies);
   if (!Number.isFinite(maxHomies) || maxHomies < 1) {
-    const sid = await sendSms(user.phone_number, "How many homies should I invite? (number >= 1)");
+    const sid = await sendSms(
+      user.phone_number,
+      "How many homies should I invite? (number >= 1)",
+    );
     await prisma.conversationMessage.create({
       data: {
         conversation_id: _ctx.conversationId,
@@ -1375,10 +1510,13 @@ export async function onInboundTwilioMessage(
 
   // If we have fewer onboarded homies than needed, cap to what's available.
   if (maxHomies > homies.length) {
-    logger.info("Capping max_participants because not enough homies onboarded", {
-      requestedMaxHomies: maxHomies,
-      availableHomies: homies.length,
-    });
+    logger.info(
+      "Capping max_participants because not enough homies onboarded",
+      {
+        requestedMaxHomies: maxHomies,
+        availableHomies: homies.length,
+      },
+    );
     maxHomies = homies.length;
   }
 
@@ -1497,7 +1635,8 @@ export async function onInboundTwilioMessage(
   const startDt = DateTime.fromISO(startIso, { setZone: true });
   const endDt = DateTime.fromISO(endIso, { setZone: true });
   if (!startDt.isValid || !endDt.isValid) {
-    const askTime = "I couldn’t confirm the time. What exact start + end time should I use?";
+    const askTime =
+      "I couldn’t confirm the time. What exact start + end time should I use?";
     const sid = await sendSms(user.phone_number, askTime);
     await prisma.conversationMessage.create({
       data: {

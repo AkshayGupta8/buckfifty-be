@@ -171,5 +171,5 @@ export function buildEventDraftPreviewSms(args: {
     ? `\nInvite policy: ${brandedInvitePolicyName(args.invitePolicy)}`
     : "";
 
-  return `Draft: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${whoLines}${noteLine}${policyLine}\n\nReply with edits, say “looks good”, or say “scratch”`;
+  return `Draft: ${args.activityName}\nWhen: ${when}\nWhere: ${args.location}\n${whoLines}${noteLine}${policyLine}\n\nReply with edits, say “looks good” to confirm, or say “scratch” to cancel`;
 }

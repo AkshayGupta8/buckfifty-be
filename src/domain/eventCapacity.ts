@@ -4,11 +4,13 @@ import type { Event, EventMemberStatus } from "@prisma/client";
  * Capacity rules for `Event.max_participants`.
  *
  * `Event.max_participants` is the maximum number of *homies* (EventMembers)
- * that may be in an “active” invite state. It NEVER includes the event creator.
+ * that may be in an “accepted” state. It NEVER includes the event creator.
  *
  * Per product decision:
+ * - only `accepted` counts toward capacity
  * - `declined` does NOT count toward capacity (replacements allowed)
  * - `listed` does NOT count toward capacity (can maintain a large backup pool)
+ * - `invited` / `messaged` do NOT count toward capacity (invites may exceed capacity)
  */
 
 export function statusCountsTowardCapacity(status: EventMemberStatus): boolean {
@@ -17,8 +19,6 @@ export function statusCountsTowardCapacity(status: EventMemberStatus): boolean {
 
 /** EventMember statuses that count toward `Event.max_participants`. */
 export const ACTIVE_CAPACITY_STATUSES = [
-  "invited",
-  "messaged",
   "accepted",
 ] as const satisfies readonly EventMemberStatus[];
 

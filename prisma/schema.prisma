@@ -123,6 +123,12 @@ model EventMember {
   member_id       String            @db.Uuid
   status          EventMemberStatus @default(listed)
 
+  /** When the invite should be considered expired (nullable). */
+  invite_expires_at DateTime? @db.Timestamptz(6)
+
+  /** Whether this invite has timed out (defaults false). */
+  invite_timed_out Boolean @default(false)
+
   /** 1-based priority order for explicitly listed homies (optional). */
   priority_rank Int?
 

@@ -14,6 +14,7 @@ import eventMemberRouter from "./routes/eventMember";
 import timeSlotRouter from "./routes/timeSlot";
 import conversationRouter from "./routes/conversation";
 import twilioRouter from "./routes/twilio";
+import { startInviteTimeoutPoller } from "./conversationTwilio/pollers/inviteTimeoutPoller";
 
 const app = express();
 const prisma = new PrismaClient();
@@ -100,4 +101,14 @@ app.get("/tables", async (req: express.Request, res: express.Response) => {
 const port = Number(process.env.PORT ?? (process.env.DEV === '1' ? 3000 : 80));
 app.listen(port, () => {
   logger.info(`Server running on port ${port}`);
+
+  // Background poller: marks expired invites as timed out and backfills from listed pool.
+  // Kill switch: set INVITE_TIMEOUT_POLLER=0 to disable.
+  if (process.env.INVITE_TIMEOUT_POLLER !== "0") {
+    const intervalMsRaw = process.env.INVITE_TIMEOUT_POLLER_INTERVAL_MS;
+    const intervalMsParsed = intervalMsRaw ? Number(intervalMsRaw) : NaN;
+    const intervalMs = Number.isFinite(intervalMsParsed) ? intervalMsParsed : 60_000;
+
+    startInviteTimeoutPoller({ intervalMs });
+  }
 });

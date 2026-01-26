@@ -1,5 +1,14 @@
 import type { Event, Member, TimeSlot } from "@prisma/client";
 
+function pick<T>(arr: readonly T[]): T {
+  // Small randomized phrase-bank selection.
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function compactSms(s: string, maxLen = 600): string {
+  return (s ?? "").replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n").trim().slice(0, maxLen);
+}
+
 export function buildMemberInviteSms(args: {
   member: Member;
   event: Event;
@@ -32,18 +41,47 @@ export function buildMemberInviteSms(args: {
   const what = (args.activityName ?? "hang")?.trim() || "hang";
   const where = (args.event.location ?? "").trim() || "(location TBD)";
 
-  const noteLine = note.length ? `\nNote: ${note}` : "";
-
-  // Warm + clear identity, while still encouraging a simple yes/no response.
-  // (The invite response analyzer can handle natural language, but a crisp ask reduces ambiguity.)
   const firstName = args.member.first_name.trim();
-  const hello = firstName.length ? `Hi ${firstName} —` : "Hi —";
 
-  return `${hello} I'm BuckFifty (the AI assistant), texting for ${args.creatorFirstName}.\nYou're invited to ${what}.\nWhen: ${when}\nWhere: ${where}${noteLine}\nCan you make it? Text me back either way.`;
+  // Phrase banks (keep SMS-friendly; no emojis).
+  const hello = firstName.length
+    ? pick([`Hey ${firstName} —`, `Hi ${firstName} —`, `Yo ${firstName} —`])
+    : pick(["Hey —", "Hi —"]);
+
+  const intro = pick([
+    `I’m BuckFifty (the AI assistant), reaching out for ${args.creatorFirstName}.`,
+    `BuckFifty here — messaging you for ${args.creatorFirstName}.`,
+    `This is BuckFifty (AI assistant) texting on behalf of ${args.creatorFirstName}.`,
+  ]);
+
+  const inviteLine = pick([
+    `${args.creatorFirstName} wants to see if you’re down to ${what}.`,
+    `You’re invited to ${what}.`,
+    `${args.creatorFirstName} is putting together ${what} — you in?`,
+  ]);
+
+  const noteLine = note.length
+    ? `\n${pick(["Note", "Quick note", "FYI"])}: ${note}`
+    : "";
+
+  // Keep a crisp RSVP ask to reduce ambiguity.
+  const rsvp = pick([
+    "Can you make it?",
+    "Are you able to make it?",
+    "Are you in? Reply YES or NO.",
+    "Can you come? Reply YES or NO.",
+  ]);
+
+  const sms = `${hello} ${intro}\n${inviteLine}\nWhen: ${when}\nWhere: ${where}${noteLine}\n${rsvp}`;
+  return compactSms(sms);
 }
 
 export function buildAmbiguousInviteReplySms(): string {
-  return "Just to confirm — are you able to make it?";
+  return pick([
+    "Just to confirm — can you make it?",
+    "Quick check — are you able to make it?",
+    "Sorry, didn’t catch that — can you make it? Reply YES or NO.",
+  ]);
 }
 
 export function buildMemberInviteAcknowledgementSms(args: {
@@ -51,22 +89,59 @@ export function buildMemberInviteAcknowledgementSms(args: {
 }): string {
   // Keep it short + generic (no event details) to minimize accidental confusion.
   if (args.decision === "accepted") {
-    return "Awesome — hope you have fun!";
+    return pick([
+      "Awesome — see you there!",
+      "Sweet — you’re in.",
+      "Perfect — glad you can make it!",
+    ]);
   }
 
-  return "All good — sorry you can’t make it. Maybe next time.";
+  return pick([
+    "All good — thanks for letting me know. Maybe next time.",
+    "No worries — catch you next time.",
+    "Got it. Sorry you can’t make it — maybe next time.",
+  ]);
+}
+
+export function buildMemberInviteFullSms(): string {
+  // Specific message for the case where the homie said “yes” but capacity was already reached.
+  // Keep it short and SMS-friendly.
+  return pick([
+    "Ah — it just filled up. Hope you can make the next one!",
+    "Sorry — it’s full now. Next time!",
+    "Bummer — we’re at capacity now. Catch you next time.",
+  ]);
 }
 
 export function buildUserNotifiedOfMemberResponseSms(args: {
   memberName: string;
   decision: "accepted" | "declined";
   summary?: string;
+  declinedReason?: "full" | null;
 }): string {
   const s = (args.summary ?? "").trim();
-  const base =
-    args.decision === "accepted"
-      ? `${args.memberName} accepted.`
-      : `${args.memberName} declined.`;
 
-  return s.length ? `${base} ${s}`.slice(0, 300) : base;
+  // NOTE: We store this as a decline internally (to trigger backfill), but the creator-facing
+  // message should reflect that the homie *wanted* to come and was blocked by capacity.
+  const isFull = args.decision === "declined" && args.declinedReason === "full";
+
+  const base = isFull
+    ? pick([
+        `${args.memberName} said yes, but it was already full.`,
+        `${args.memberName} was in, but the event was already full.`,
+        `${args.memberName} tried to accept, but capacity was already reached.`,
+      ])
+    : args.decision === "accepted"
+      ? pick([
+          `${args.memberName} accepted.`,
+          `${args.memberName} is in.`,
+          `${args.memberName} can make it.`,
+        ])
+      : pick([
+          `${args.memberName} declined.`,
+          `${args.memberName} can’t make it.`,
+          `${args.memberName} is out.`,
+        ]);
+
+  return compactSms(s.length ? `${base} ${s}` : base, 300);
 }

@@ -35,7 +35,7 @@ router.get("/:id/details", async (req: Request, res: Response) => {
             member: true,
           },
           orderBy: [
-            { priority_rank: "asc" },
+            { priority_rank: { sort: "asc", nulls: "last" } },
             // secondary stable ordering
             { member: { last_name: "asc" } },
             { member: { first_name: "asc" } },
@@ -90,7 +90,7 @@ router.post("/", async (req: Request, res: Response) => {
         const activeCount = await tx.eventMember.count({
           where: {
             event_id: created.event_id,
-            // invited/messaged/accepted count; listed/declined do not.
+            // accepted-only counts; invited/messaged/listed/declined do not.
             status: { in: [...ACTIVE_CAPACITY_STATUSES] },
           },
         });

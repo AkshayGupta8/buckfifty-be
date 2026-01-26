@@ -72,6 +72,7 @@ router.post("/", async (req: Request, res: Response) => {
             },
           });
 
+          // If we're creating an EventMember with status=accepted, it contributes 1.
           if (activeCount + 1 > max) {
             throw new Error(
               `${CAPACITY_ERR_PREFIX} Event is at capacity (${max}) — cannot add another active homie.`

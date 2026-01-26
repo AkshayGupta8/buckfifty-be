@@ -586,10 +586,15 @@ export async function onInboundTwilioMessage(
         // Persist EventMember rows per policy.
         // - Immediate invites are status=invited
         // - Follow-up pool is status=listed
-        // - priority_rank only applies to explicitly listed preferred homies
-        const preferredRankById = new Map(
-          d.preferredMemberIds.map((id, idx) => [id, idx + 1] as const)
-        );
+        // - priority_rank is a 1-based ordering for ALL members based on the locked plan:
+        //   inviting-now order first, then backup order.
+        const orderedIds = uniqueById(
+          [...(d.immediateMemberIds ?? []), ...(d.followUpMemberIds ?? [])]
+            .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+            .map((id) => ({ member_id: id }))
+        ).map((x) => x.member_id);
+
+        const rankById = new Map(orderedIds.map((id, idx) => [id, idx + 1] as const));
 
         const rows: {
           event_id: string;
@@ -607,6 +612,10 @@ export async function onInboundTwilioMessage(
             ? preferredMembersForPlan
             : uniqueById(homies);
 
+        // Defensive: if somehow the pool contains ids not in the locked plan ordering,
+        // append them after the known ordered ids.
+        let nextRank = orderedIds.length + 1;
+
         for (const m of pool) {
           const status: "listed" | "invited" = immediateIdSet.has(m.member_id)
             ? "invited"
@@ -614,7 +623,12 @@ export async function onInboundTwilioMessage(
               ? "listed"
               : "listed";
 
-          const rank = preferredRankById.get(m.member_id);
+          let rank = rankById.get(m.member_id);
+          if (typeof rank !== "number") {
+            rank = nextRank;
+            rankById.set(m.member_id, rank);
+            nextRank += 1;
+          }
 
           rows.push({
             event_id: event.event_id,

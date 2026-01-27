@@ -144,7 +144,7 @@ export function buildEventDraftPreviewSms(args: {
 
     const backupLine =
       args.invitePolicy === "exact"
-        ? "Backup invites (if needed): (none — only these homies will be invited)"
+        ? "Backup invites (if needed): (none; only these homies will be invited)"
         : `Backup invites (if needed): ${followUp.length ? followUp.join(", ") : "(none)"}`;
 
     const excludedLine = excluded.length

@@ -10,6 +10,7 @@ import { DateTime } from "luxon";
 import { fullNameForMember } from "../domain/homies";
 import {
   buildAmbiguousInviteReplySms,
+  buildCreatorRosterAfterMemberDecisionSms,
   buildMemberInviteAcknowledgementSms,
   buildMemberInviteFullSms,
   buildMemberInviteSms,
@@ -428,6 +429,46 @@ export async function onMemberInboundMessage(args: {
   const creatorName = (event.createdBy.first_name ?? "").trim() || "Your friend";
   const memberName = fullNameForMember(member);
 
+  const buildCreatorRosterSms = async (decision: "accepted" | "declined" | "declined_full") => {
+    // Order by invite-policy semantics so backups/pending match the real queue.
+    const ems = await prisma.eventMember.findMany({
+      where: { event_id: args.eventId },
+      include: { member: true },
+      orderBy: [
+        { priority_rank: { sort: "asc", nulls: "last" } },
+        { event_member_id: "asc" },
+      ],
+    });
+
+    const accepted: string[] = [];
+    const pending: string[] = [];
+    const declined: string[] = [];
+    const backups: string[] = [];
+
+    for (const em of ems) {
+      const n = fullNameForMember(em.member).trim();
+      if (!n) continue;
+      if (em.status === "accepted") accepted.push(n);
+      else if (em.status === "declined") declined.push(n);
+      else if (em.status === "listed") backups.push(n);
+      else if (em.status === "invited" || em.status === "messaged") pending.push(n);
+    }
+
+    const max = normalizeMaxParticipants(event.max_participants);
+    const openSpots = typeof max === "number" ? Math.max(0, max - accepted.length) : null;
+
+    return buildCreatorRosterAfterMemberDecisionSms({
+      memberName,
+      decision,
+      summary: inviteDecision.summary,
+      activityName: event.activity?.name ?? null,
+      timeSlot,
+      timeZone: event.createdBy.timezone,
+      openSpots,
+      roster: { accepted, pending, declined, backups },
+    });
+  };
+
   // Helper for sending + logging to this member conversation.
   const sendToMember = async (sms: string, attributes?: Prisma.InputJsonValue) => {
     const phone = (member.phone_number ?? "").trim();
@@ -482,7 +523,7 @@ export async function onMemberInboundMessage(args: {
     });
   };
 
-  const maybeTriggerDeclineBackfill = async (): Promise<void> => {
+  const maybeTriggerDeclineBackfill = async (): Promise<string | null> => {
     // When someone declines, invite exactly ONE backup homie.
     // This mirrors inviteTimeoutPoller semantics.
     const promoted = await prisma.$transaction(async (tx) => {
@@ -522,7 +563,7 @@ export async function onMemberInboundMessage(args: {
       logger.info("coordinator:declineBackfill none_available", {
         eventId: args.eventId,
       });
-      return;
+      return null;
     }
 
     await inviteEventMember({
@@ -530,6 +571,8 @@ export async function onMemberInboundMessage(args: {
       memberId: promoted,
       reason: "decline_backfill",
     });
+
+    return promoted;
   };
 
   // =========================
@@ -603,14 +646,14 @@ export async function onMemberInboundMessage(args: {
       });
     }
 
-    const creatorSms = buildUserNotifiedOfMemberResponseSms({
-      memberName,
-      decision: res.finalDecision,
-      summary: inviteDecision.summary,
-      declinedReason: res.finalDecision === "declined" ? (res as any).reason ?? null : null,
-    });
+    // Backfill on declines (including "yes but full") per product decision.
+    if (res.finalDecision === "declined") {
+      await maybeTriggerDeclineBackfill();
+    }
 
-    await sendToCreator(creatorSms, {
+    const decisionForSms = res.finalDecision === "accepted" ? "accepted" : "declined_full";
+    const rosterSms = await buildCreatorRosterSms(decisionForSms);
+    await sendToCreator(rosterSms, {
       kind: "creator_notified_member_response",
       eventId: args.eventId,
       memberId: args.memberId,
@@ -619,11 +662,6 @@ export async function onMemberInboundMessage(args: {
       summary: inviteDecision.summary,
       ...(res.finalDecision === "declined" ? { declinedReason: (res as any).reason ?? null } : {}),
     });
-
-    // Backfill on declines (including "yes but full") per product decision.
-    if (res.finalDecision === "declined") {
-      await maybeTriggerDeclineBackfill();
-    }
 
     return;
   }
@@ -643,13 +681,11 @@ export async function onMemberInboundMessage(args: {
       memberId: args.memberId,
     });
 
-    const creatorSms = buildUserNotifiedOfMemberResponseSms({
-      memberName,
-      decision: "declined",
-      summary: inviteDecision.summary,
-    });
+    // Promote a backup first so roster reflects the newly-invited replacement.
+    await maybeTriggerDeclineBackfill();
 
-    await sendToCreator(creatorSms, {
+    const rosterSms = await buildCreatorRosterSms("declined");
+    await sendToCreator(rosterSms, {
       kind: "creator_notified_member_response",
       eventId: args.eventId,
       memberId: args.memberId,
@@ -657,8 +693,6 @@ export async function onMemberInboundMessage(args: {
       decision: "declined",
       summary: inviteDecision.summary,
     });
-
-    await maybeTriggerDeclineBackfill();
     return;
   }
 

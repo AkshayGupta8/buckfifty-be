@@ -389,7 +389,7 @@ export async function onInboundTwilioMessage(
 
   if (isWhoAreYou) {
     const activityName = (activity.name ?? "").trim() || "your activity";
-    const sms = `I'm the BuckFifty AI — I help you schedule ${activityName} with your homies.\n\nTell me what you want to do (e.g. \"schedule ${activityName} tomorrow at 7\") and I'll take it from there.`;
+    const sms = `I'm the BuckFifty AI. I help you schedule ${activityName} with your homies.\n\nTell me what you want to do (e.g. \"schedule ${activityName} tomorrow at 7\") and I'll take it from there.`;
 
     const sid = await sendSms(user.phone_number, sms);
     await prisma.conversationMessage.create({
@@ -502,7 +502,7 @@ export async function onInboundTwilioMessage(
 
     if (decision.decision === "cancel") {
       const sms =
-        "No problem — I scratched that draft. Text me anytime to start a new one.";
+        "No problem. I scratched that draft. Text me anytime to start a new one.";
       const sid = await sendSms(user.phone_number, sms);
       await prisma.conversationMessage.create({
         data: {
@@ -823,7 +823,7 @@ export async function onInboundTwilioMessage(
 
           delete (nextState as any).pendingEvent;
 
-          const ask = "Got it — what end time should I use? (or how long?)";
+          const ask = "Got it. What end time should I use? (or how long?)";
           const sid = await sendSms(user.phone_number, ask);
           await prisma.conversationMessage.create({
             data: {
@@ -1585,7 +1585,7 @@ export async function onInboundTwilioMessage(
   });
 
   if (policyHint && policyHint !== invitePolicy) {
-    const askPolicy = `Quick check — do you want ${brandedInvitePolicyName(policyHint)}, or ${brandedInvitePolicyName(invitePolicy)}?`;
+    const askPolicy = `Quick check: do you want ${brandedInvitePolicyName(policyHint)}, or ${brandedInvitePolicyName(invitePolicy)}?`;
     const sid = await sendSms(user.phone_number, askPolicy);
     await prisma.conversationMessage.create({
       data: {
@@ -1612,7 +1612,7 @@ export async function onInboundTwilioMessage(
 
   // Defensive: exact-list must match capacity.
   if (invitePolicy === "exact" && preferredMembers.length !== maxHomies) {
-    const askExact = `Just to confirm — do you want to invite exactly ${preferredMembers.length} homies, or invite ${maxHomies}?`;
+    const askExact = `Just to confirm: do you want to invite exactly ${preferredMembers.length} homies, or invite ${maxHomies}?`;
     const sid = await sendSms(user.phone_number, askExact);
     await prisma.conversationMessage.create({
       data: {

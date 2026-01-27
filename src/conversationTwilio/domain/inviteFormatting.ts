@@ -7,10 +7,111 @@ function pick<T>(arr: readonly T[]): T {
 
 function compactSms(s: string, maxLen = 600): string {
   return (s ?? "")
-    .replace(/\s+\n/g, "\n")
-    .replace(/\n\s+/g, "\n")
+    // Trim *spaces/tabs* around newlines, but preserve blank lines ("\n\n") for readability.
+    .replace(/[\t ]+\n/g, "\n")
+    .replace(/\n[\t ]+/g, "\n")
+    // Avoid excessive vertical whitespace in SMS (cap at 2 newlines).
+    .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, maxLen);
+}
+
+function formatEventWhenForCreator(args: {
+  timeSlot: TimeSlot;
+  timeZone: string;
+}): string {
+  // Example: "Sat, Jan 17 7:00 PM - 8:30 PM" (timezone implied by creator tz)
+  const dayFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: args.timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+
+  const timeFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: args.timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  return `${dayFmt.format(args.timeSlot.start_time)} ${timeFmt.format(
+    args.timeSlot.start_time,
+  )} - ${timeFmt.format(args.timeSlot.end_time)}`;
+}
+
+function formatRosterSection(args: {
+  title: string;
+  names: string[];
+  maxNames?: number;
+}): string {
+  const max = Math.max(0, Math.trunc(args.maxNames ?? 6));
+  const names = (args.names ?? []).map((n) => (n ?? "").trim()).filter(Boolean);
+
+  if (names.length === 0) {
+    return `${args.title}:\n- (none)`;
+  }
+
+  const shown = names.slice(0, max);
+  const remaining = names.length - shown.length;
+  const lines = shown.map((n) => `- ${n}`);
+  if (remaining > 0) lines.push(`- (and ${remaining} more)`);
+  return `${args.title}:\n${lines.join("\n")}`;
+}
+
+export function buildCreatorRosterAfterMemberDecisionSms(args: {
+  memberName: string;
+  decision: "accepted" | "declined" | "declined_full";
+  /** Short, SMS-safe summary of the member's reply (from the inviteResponseAnalyzer). */
+  summary?: string;
+  activityName?: string | null;
+  timeSlot: TimeSlot;
+  timeZone: string;
+  /** If null/undefined, omit the open-spots line (used when max_participants is null). */
+  openSpots?: number | null;
+  roster: {
+    accepted: string[];
+    pending: string[]; // invited + messaged
+    declined: string[];
+    backups: string[]; // listed
+  };
+}): string {
+  const what = (args.activityName ?? "hang")?.trim() || "hang";
+  const when = formatEventWhenForCreator({
+    timeSlot: args.timeSlot,
+    timeZone: args.timeZone,
+  });
+
+  const summary = (args.summary ?? "").trim().slice(0, 300);
+  const summarySuffix = summary.length ? ` ${summary}` : "";
+
+  const header =
+    args.decision === "accepted"
+      ? `${args.memberName} is in for ${what} (${when}).${summarySuffix}`
+      : args.decision === "declined_full"
+        ? `${args.memberName} said yes for ${what} (${when}), but it was already full.${summarySuffix}`
+        : `${args.memberName} declined ${what} (${when}).${summarySuffix}`;
+
+  const rosterIntroLine =
+    typeof args.openSpots === "number" && Number.isFinite(args.openSpots)
+      ? Math.trunc(args.openSpots) <= 0
+        ? "There are no more open spots. Roster:"
+        : `We still have ${Math.trunc(args.openSpots)} open ${
+            Math.trunc(args.openSpots) === 1 ? "spot" : "spots"
+          }. Roster:`
+      : "Roster:";
+
+  const roster = [
+    rosterIntroLine,
+    formatRosterSection({ title: "Approved", names: args.roster.accepted }),
+    formatRosterSection({
+      title: "Pending response",
+      names: args.roster.pending,
+    }),
+    formatRosterSection({ title: "Declined", names: args.roster.declined }),
+    formatRosterSection({ title: "Backups", names: args.roster.backups }),
+  ].join("\n\n");
+
+  return compactSms(`${header}\n\n${roster}`, 1200);
 }
 
 export function buildMemberInviteSms(args: {
@@ -49,19 +150,19 @@ export function buildMemberInviteSms(args: {
 
   // Phrase banks (keep SMS-friendly; no emojis).
   const hello = firstName.length
-    ? pick([`Hey ${firstName} —`, `Hi ${firstName} —`, `Yo ${firstName} —`])
-    : pick(["Hey —", "Hi —"]);
+    ? pick([`Hi ${firstName},`, `Hello ${firstName},`])
+    : pick(["Hi,", "Hello,"]);
 
   const intro = pick([
     `I’m BuckFifty (the AI assistant), reaching out for ${args.creatorFirstName}.`,
-    `BuckFifty here — messaging you for ${args.creatorFirstName}.`,
+    `This is BuckFifty, messaging you for ${args.creatorFirstName}.`,
     `This is BuckFifty (AI assistant) texting on behalf of ${args.creatorFirstName}.`,
   ]);
 
   const inviteLine = pick([
     `${args.creatorFirstName} wants to see if you’re down to ${what}.`,
     `You’re invited to ${what}.`,
-    `${args.creatorFirstName} is putting together ${what} — you in?`,
+    `${args.creatorFirstName} is putting together ${what}. Would you like to join?`,
   ]);
 
   const noteLine = note.length
@@ -144,8 +245,8 @@ export function buildMemberInviteReminderSms(args: {
 
   const firstName = args.member.first_name.trim();
   const hello = firstName.length
-    ? pick([`Hey ${firstName} —`, `Hi ${firstName} —`])
-    : "Hey —";
+    ? pick([`Hi ${firstName},`, `Hello ${firstName},`])
+    : pick(["Hi,", "Hello,"]);
 
   const sms = `${hello} quick reminder from BuckFifty for ${args.creatorFirstName}.\n${what}\nWhen: ${when}\nWhere: ${where}${noteLine}\n\nYour spot is currently yours if you want it, but at ${deadline} I’m going to start inviting others.`;
   return compactSms(sms);
@@ -153,9 +254,9 @@ export function buildMemberInviteReminderSms(args: {
 
 export function buildAmbiguousInviteReplySms(): string {
   return pick([
-    "Just to confirm — can you make it?",
-    "Quick check — are you able to make it?",
-    "Sorry, didn’t catch that — can you make it?",
+    "Just to confirm, can you make it?",
+    "Quick check, are you able to make it?",
+    "Sorry, I didn’t catch that. Can you make it?",
   ]);
 }
 
@@ -165,16 +266,16 @@ export function buildMemberInviteAcknowledgementSms(args: {
   // Keep it short + generic (no event details) to minimize accidental confusion.
   if (args.decision === "accepted") {
     return pick([
-      "Awesome — see you there!",
-      "Sweet — you’re in.",
-      "Perfect — glad you can make it!",
+      "Great, see you there!",
+      "Perfect, you’re in.",
+      "Glad you can make it!",
     ]);
   }
 
   return pick([
-    "All good — thanks for letting me know. Maybe next time.",
-    "No worries — catch you next time.",
-    "Got it. Sorry you can’t make it — maybe next time.",
+    "All good. Thanks for letting me know. Maybe next time.",
+    "No worries. Catch you next time.",
+    "Got it. Sorry you can’t make it. Maybe next time.",
   ]);
 }
 
@@ -182,9 +283,9 @@ export function buildMemberInviteFullSms(): string {
   // Specific message for the case where the homie said “yes” but capacity was already reached.
   // Keep it short and SMS-friendly.
   return pick([
-    "Ah — it just filled up. Hope you can make the next one!",
-    "Sorry — it’s full now. Next time!",
-    "Bummer — we’re at capacity now. Catch you next time.",
+    "Sorry, it just filled up. Hope you can make the next one!",
+    "Sorry, it’s full now. Next time!",
+    "We’re at capacity now. Catch you next time.",
   ]);
 }
 

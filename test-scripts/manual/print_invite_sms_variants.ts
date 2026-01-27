@@ -1,4 +1,7 @@
-import { buildMemberInviteSms } from "../../src/conversationTwilio/domain/inviteFormatting";
+import {
+  buildCreatorRosterAfterMemberDecisionSms,
+  buildMemberInviteSms,
+} from "../../src/conversationTwilio/domain/inviteFormatting";
 
 // Lightweight manual script to eyeball SMS variation.
 // Run:
@@ -42,4 +45,45 @@ const sms = () =>
 for (let i = 0; i < 15; i++) {
   console.log(`\n--- Sample ${i + 1} ---`);
   console.log(sms());
+}
+
+console.log("\n\n===============================\nCreator roster SMS samples\n===============================");
+
+const creatorRosterSms = (
+  decision: "accepted" | "declined" | "declined_full",
+  openSpots: number,
+) =>
+  buildCreatorRosterAfterMemberDecisionSms({
+    memberName: "Anish",
+    decision,
+    summary: "He said: might be 10 min late but I’m in.",
+    activityName: "golf",
+    timeSlot: {
+      time_slot_id: "ts1",
+      event_id: "e1",
+      start_time: new Date(Date.now() + 1000 * 60 * 60 * 24 * 3),
+      end_time: new Date(Date.now() + 1000 * 60 * 60 * 24 * 3 + 1000 * 60 * 90),
+      created_at: new Date(),
+      updated_at: new Date(),
+    } as any,
+    timeZone: "America/Denver",
+    openSpots,
+    roster: {
+      accepted: ["Sam Smith", "Nina Patel"],
+      pending: ["Akshay Gupta", "Mike Jones"],
+      declined: ["Ben Lee"],
+      backups: ["Chris Kim", "Taylor Ray", "Jordan Wu", "Alex Chen", "Priya Shah", "Dana Fox", "Morgan Yu"],
+    },
+  });
+
+for (const d of ["accepted", "declined", "declined_full"] as const) {
+  console.log(`\n--- Creator (${d}) ---`);
+  console.log(creatorRosterSms(d, 1));
+}
+
+console.log("\n\n===============================\nCreator roster SMS samples (0 open spots)\n===============================");
+
+for (const d of ["accepted", "declined", "declined_full"] as const) {
+  console.log(`\n--- Creator (${d}) ---`);
+  console.log(creatorRosterSms(d, 0));
 }

@@ -229,22 +229,28 @@ router.post(
         "",
         "Save Buckfifty to your contacts so you can text anytime.",
       ].join("\n");
-      const messageSid = await sendMms(
+
+      // 1) Intro text
+      const introMessageSid = await sendSms(user.phone_number, messageBody);
+
+      // 2) vCard attachment (send exactly once, between the two text messages)
+      const contactCardMessageSid = await sendMms(
         user.phone_number,
-        messageBody,
+        "",
         mediaUrl,
       );
 
-      const messageSid2 = await sendMms(
+      // 3) Invite policy explainer
+      const invitePoliciesMessageSid = await sendSms(
         user.phone_number,
         buildInvitePolicyExplainerLines(),
-        mediaUrl,
       );
 
       res.json({
         message: "Contact Card sent and invite policies explained",
-        messageSid,
-        messageSid2,
+        introMessageSid,
+        contactCardMessageSid,
+        invitePoliciesMessageSid,
         mediaUrl,
       });
     } catch (error) {

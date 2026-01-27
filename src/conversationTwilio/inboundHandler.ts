@@ -46,6 +46,7 @@ import {
   buildInvitePolicyIntentAnalyzerSystemPrompt,
 } from "./analyzers/invitePolicyIntentAnalyzer";
 import { applyInvitePlanPatch } from "./domain/invitePlanEdits";
+import { parseInvitePolicyChoiceFromUserText } from "./domain/invitePolicyChoice";
 import type { InboundTwilioMessageContext } from "./types";
 
 import { DateTime } from "luxon";
@@ -111,9 +112,13 @@ function buildInvitePlan(args: {
 
     // Priority Invite behavior (per product):
     // - ALWAYS invite all preferred (priority) homies, even if that exceeds n.
-    // - ALSO randomly pick n additional homies and invite them.
-    // This means the immediate invite set may exceed n.
-    const fillers = remaining.slice(0, max);
+    // - If preferred doesn't already fill capacity, randomly pick additional homies
+    //   until we reach the requested total capacity.
+    //
+    // NOTE: Invites may exceed capacity because capacity is enforced at ACCEPT time.
+    // But when preferred <= n, treat n as the TOTAL desired homies (not "additional").
+    const fillersNeeded = Math.max(0, max - preferred.length);
+    const fillers = remaining.slice(0, fillersNeeded);
     const immediate = [...preferred, ...fillers];
 
     const immediateIds = new Set(immediate.map((m) => m.member_id));
@@ -237,6 +242,8 @@ function deriveInvitePolicy(args: {
   if (args.preferredCount === args.maxHomies) return "exact";
   return "prioritized";
 }
+
+// invite-policy choice parsing lives in ./domain/invitePolicyChoice
 
 async function detectInvitePolicyHintFromMessages(
   messages: ChatMessage[],
@@ -1055,7 +1062,7 @@ export async function onInboundTwilioMessage(
 
   const updatedAtIso = new Date().toISOString();
 
-  const prevDraft: ActiveEventDraft =
+  const prevDraft0: ActiveEventDraft =
     state.activeDraft?.status === "collecting_details" &&
     state.activeDraft.activityId === activity.activity_id
       ? state.activeDraft
@@ -1064,6 +1071,63 @@ export async function onInboundTwilioMessage(
           activityId: activity.activity_id,
           updatedAtIso,
         };
+
+  // Work on a mutable copy so we can apply pending-choice decisions cleanly.
+  const prevDraft: ActiveEventDraft = { ...prevDraft0 };
+
+  // If we previously asked the user to choose between two invite policies,
+  // treat this inbound SMS as answering that question.
+  //
+  // Without this, we can get stuck in a loop where each message re-triggers the
+  // policy mismatch and re-asks the same "Quick check".
+  const pendingChoice = prevDraft.pendingInvitePolicyChoice;
+  if (pendingChoice) {
+    const chosen = parseInvitePolicyChoiceFromUserText({
+      text: _ctx.body ?? "",
+      policyHint: pendingChoice.policyHint,
+      inferredPolicy: pendingChoice.inferredPolicy,
+    });
+
+    if (!chosen) {
+      const sms = `Quick check — reply with either: ${brandedInvitePolicyName(pendingChoice.policyHint)} or ${brandedInvitePolicyName(pendingChoice.inferredPolicy)}.`;
+      const sid = await sendSms(user.phone_number, sms);
+      await prisma.conversationMessage.create({
+        data: {
+          conversation_id: _ctx.conversationId,
+          role: "assistant",
+          direction: "outbound",
+          content: sms,
+          twilio_sid: sid,
+          attributes: {
+            needs: "invite_policy_confirmation",
+            policyHint: pendingChoice.policyHint,
+            inferredPolicy: pendingChoice.inferredPolicy,
+            reason: "unrecognized_policy_choice",
+          },
+        },
+      });
+
+      // Persist state so we remain in confirmation mode.
+      const nextState = {
+        ...(state as unknown as Prisma.JsonObject),
+        activeDraft: {
+          ...(prevDraft as unknown as Prisma.JsonObject),
+          updatedAtIso,
+        } as unknown as Prisma.InputJsonValue,
+      } as Prisma.JsonObject;
+
+      await prisma.conversation.update({
+        where: { conversation_id: _ctx.conversationId },
+        data: { state: nextState as unknown as Prisma.InputJsonValue },
+      });
+
+      return;
+    }
+
+    // Apply user-chosen override and clear pending confirmation.
+    prevDraft.invitePolicyOverride = chosen;
+    delete prevDraft.pendingInvitePolicyChoice;
+  }
 
   const isNewPlanningSession =
     !(state.activeDraft?.status === "collecting_details") ||
@@ -1579,13 +1643,17 @@ export async function onInboundTwilioMessage(
   const preferredMembers = explicitResolution.preferredMembers;
   const preferredNamesForSms = preferredMembers.map(fullNameForMember);
 
-  const invitePolicy = deriveInvitePolicy({
+  const inferredPolicy = deriveInvitePolicy({
     preferredCount: preferredMembers.length,
     maxHomies,
   });
 
-  if (policyHint && policyHint !== invitePolicy) {
-    const askPolicy = `Quick check: do you want ${brandedInvitePolicyName(policyHint)}, or ${brandedInvitePolicyName(invitePolicy)}?`;
+  const invitePolicy = nextDraft.invitePolicyOverride ?? inferredPolicy;
+
+  // If user explicitly asked for a branded policy that conflicts with the inferred one,
+  // ask once and persist that we're awaiting their choice.
+  if (policyHint && policyHint !== inferredPolicy && !nextDraft.invitePolicyOverride) {
+    const askPolicy = `Quick check: do you want ${brandedInvitePolicyName(policyHint)}, or ${brandedInvitePolicyName(inferredPolicy)}?`;
     const sid = await sendSms(user.phone_number, askPolicy);
     await prisma.conversationMessage.create({
       data: {
@@ -1597,15 +1665,32 @@ export async function onInboundTwilioMessage(
         attributes: {
           needs: "invite_policy_confirmation",
           policyHint,
-          inferredPolicy: invitePolicy,
+          inferredPolicy,
           maxHomies,
           preferredNames: preferredNamesForSms,
         },
       },
     });
+
+    // Persist pending confirmation state so the next inbound message is interpreted
+    // as a policy choice (and we don't re-ask forever).
+    const nextDraftWithPending: ActiveEventDraft = {
+      ...nextDraft,
+      pendingInvitePolicyChoice: {
+        policyHint,
+        inferredPolicy,
+        askedAtIso: updatedAtIso,
+      },
+    };
+
+    const nextState = {
+      ...(state as unknown as Prisma.JsonObject),
+      activeDraft: nextDraftWithPending as unknown as Prisma.InputJsonValue,
+    } as Prisma.JsonObject;
+
     await prisma.conversation.update({
       where: { conversation_id: _ctx.conversationId },
-      data: { state: draftStateUpdate as unknown as Prisma.InputJsonValue },
+      data: { state: nextState as unknown as Prisma.InputJsonValue },
     });
     return;
   }

@@ -101,6 +101,25 @@ export type ActiveEventDraft = {
   /** Max number of homies to invite (does NOT include the user). */
   maxHomies?: number;
 
+  /**
+   * Optional invite-policy override chosen explicitly by the user.
+   *
+   * This exists to break loops where:
+   * - the LLM detects a branded policy hint (e.g. "Priority Invite")
+   * - but the inferred policy from (preferredNames,maxHomies) differs.
+   */
+  invitePolicyOverride?: EventInvitePolicy;
+
+  /**
+   * When set, the assistant has asked a "Quick check" policy question and is
+   * awaiting the user's reply (e.g. "priority" vs "handpicked").
+   */
+  pendingInvitePolicyChoice?: {
+    policyHint: EventInvitePolicy;
+    inferredPolicy: EventInvitePolicy;
+    askedAtIso: string;
+  };
+
   /** Optional note/instruction to share with invited members. */
   inviteMessage?: string | null;
 

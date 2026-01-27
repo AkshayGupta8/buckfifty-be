@@ -45,6 +45,10 @@ import {
   analyzeInvitePolicyIntent,
   buildInvitePolicyIntentAnalyzerSystemPrompt,
 } from "./analyzers/invitePolicyIntentAnalyzer";
+import {
+  analyzeHelpIntent,
+  buildHelpIntentAnalyzerSystemPrompt,
+} from "./analyzers/helpIntentAnalyzer";
 import { applyInvitePlanPatch } from "./domain/invitePlanEdits";
 import { parseInvitePolicyChoiceFromUserText } from "./domain/invitePolicyChoice";
 import type { InboundTwilioMessageContext } from "./types";
@@ -435,7 +439,47 @@ export async function onInboundTwilioMessage(
   const cmd = normalizeCommand(_ctx.body ?? "");
   const isHelpCommand = cmd === "guide" || cmd === "how does this work";
 
-  if (isHelpCommand) {
+  // Natural-language help/guide intent (LLM-based).
+  // This catches messages like: "Can you tell me about the different types of invites?"
+  // Guardrails:
+  // - keep temperature=0
+  // - treat low-confidence as no intent
+  // - optional question-shape check to avoid hijacking scheduling details
+  let helpIntent: {
+    intent: "invite_guide" | "scheduler_help" | null;
+    confidence: "high" | "medium" | "low";
+    reason: string;
+  } | null = null;
+
+  if (!isHelpCommand) {
+    const raw = (_ctx.body ?? "").trim();
+    const looksLikeQuestion =
+      raw.includes("?") ||
+      /^(what|how|can you|could you|tell me|explain|help)\b/i.test(raw);
+
+    if (raw.length > 0 && looksLikeQuestion) {
+      const systemPrompt = buildHelpIntentAnalyzerSystemPrompt();
+      const res = await analyzeHelpIntent({
+        systemPrompt,
+        messages: [{ role: "user", content: raw }],
+      });
+      helpIntent = res.intent;
+
+      logger.info("helpIntent", {
+        intent: helpIntent.intent,
+        confidence: helpIntent.confidence,
+        reason: helpIntent.reason,
+        rawText: res.rawText,
+      });
+    }
+  }
+
+  const shouldSendHelp =
+    isHelpCommand ||
+    (helpIntent?.intent && helpIntent.confidence !== "low") ||
+    false;
+
+  if (shouldSendHelp) {
     const sms = buildSchedulerHowItWorksSms({ activityName: activity.name });
     const sid = await sendSms(user.phone_number, sms);
     await prisma.conversationMessage.create({
@@ -1451,7 +1495,7 @@ export async function onInboundTwilioMessage(
         : `Let’s schedule your ${activityName}.`
       : `For ${activityName}, I still need:`;
 
-    const hint = "Reply “guide” if you want to see how invites work.";
+    const hint = "Ask “how do invites work?” if you want to see invite options.";
 
     const askWithContext = [header, ask, "", hint].join("\n").trim();
 
